@@ -78,6 +78,52 @@ export async function saveChartSnapshot(
   );
 }
 
+export interface MetricCheck {
+  platform: string;
+  appId: string;
+  appTitle: string;
+  term: string;
+  country: string;
+  language: string | null;
+  rank: number | null;
+  totalResults: number;
+  volume: number;
+  difficulty: number;
+}
+
+/** Сохранить проверку «приложение + ключ» в историю (для графиков). */
+export async function saveMetricCheck(m: MetricCheck): Promise<void> {
+  await query(
+    `INSERT INTO metric_checks
+       (platform, app_id, app_title, term, country, language,
+        rank, total_results, volume, difficulty)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    [
+      m.platform, m.appId, m.appTitle, m.term, m.country, m.language,
+      m.rank, m.totalResults, m.volume, m.difficulty,
+    ],
+  );
+}
+
+/** История проверок по связке «приложение + ключ» во времени. */
+export async function getMetricHistory(
+  platform: string,
+  appId: string,
+  term: string,
+  country: string,
+): Promise<
+  { rank: number | null; totalResults: number; volume: number; capturedAt: string }[]
+> {
+  return query(
+    `SELECT rank, total_results AS "totalResults", volume,
+            captured_at AS "capturedAt"
+     FROM metric_checks
+     WHERE platform = $1 AND app_id = $2 AND term = $3 AND country = $4
+     ORDER BY captured_at`,
+    [platform, appId, term.toLowerCase().trim(), country],
+  );
+}
+
 export async function saveVolumeEstimate(
   keywordId: number,
   score: number,

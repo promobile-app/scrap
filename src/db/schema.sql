@@ -59,6 +59,25 @@ CREATE TABLE IF NOT EXISTS chart_snapshots (
 CREATE INDEX IF NOT EXISTS idx_chart_app_time
   ON chart_snapshots (app_id, captured_at DESC);
 
+-- История проверок «приложение + ключ» (Метрики по ключу) — для графиков.
+-- app_id здесь TEXT: App Store — числовой id, Google Play — имя пакета.
+CREATE TABLE IF NOT EXISTS metric_checks (
+  id            BIGSERIAL PRIMARY KEY,
+  platform      TEXT NOT NULL,        -- ios / android
+  app_id        TEXT NOT NULL,
+  app_title     TEXT,
+  term          TEXT NOT NULL,
+  country       TEXT NOT NULL,
+  language      TEXT,
+  rank          INTEGER,              -- NULL = вне выдачи
+  total_results INTEGER,
+  volume        INTEGER,
+  difficulty    INTEGER,
+  captured_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_metric_checks_lookup
+  ON metric_checks (platform, app_id, term, country, captured_at);
+
 -- Оценки поискового объёма по ключевому слову (Search Volume / Popularity).
 CREATE TABLE IF NOT EXISTS volume_estimates (
   id            BIGSERIAL PRIMARY KEY,
