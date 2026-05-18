@@ -66,6 +66,20 @@
     </div>
 
     <div class="card">
+      <h2>Массовая таблица — приложения × ключи</h2>
+      <div class="muted" style="margin-bottom:8px">
+        Добавьте приложения кнопкой «+ в таблицу» в списке выше, введите ключи (по одному в строке).
+      </div>
+      <div id="tableApps" style="margin-bottom:8px"></div>
+      <textarea id="bulkKeywords" rows="5" style="width:100%;box-sizing:border-box"
+        placeholder="кредит&#10;займ онлайн&#10;деньги в долг"></textarea>
+      <div style="margin-top:8px">
+        <button onclick="buildTable()">Построить таблицу</button>
+      </div>
+      <div id="bulkResult"></div>
+    </div>
+
+    <div class="card">
       <h2>Анализ одного ключевого слова</h2>
       <input id="kw" placeholder="например: photo editor" size="30" />
       <button onclick="analyze()">Анализировать</button>
@@ -91,6 +105,56 @@
     // обращаемся к API напрямую на localhost:3000.
     const API = location.port === '3000' ? '' : 'http://localhost:3000';
     let selectedApp = null;
+    let tableApps = [];
+
+    function addToTable(appId, title) {
+      if (tableApps.some(a => a.appId === appId)) return;
+      tableApps.push({ appId, title });
+      renderTableApps();
+    }
+    function removeFromTable(appId) {
+      tableApps = tableApps.filter(a => a.appId !== appId);
+      renderTableApps();
+    }
+    function renderTableApps() {
+      const el = document.getElementById('tableApps');
+      if (!tableApps.length) { el.innerHTML = '<span class="muted">приложения не добавлены</span>'; return; }
+      el.innerHTML = tableApps.map(a => `<span style="display:inline-block;background:#e3f0ff;
+        border-radius:14px;padding:4px 10px;margin:3px 4px 3px 0;font-size:13px">
+        ${a.title} <b style="cursor:pointer;color:#c00" onclick="removeFromTable('${a.appId}')">✕</b></span>`).join('');
+    }
+
+    async function buildTable() {
+      const keywords = document.getElementById('bulkKeywords').value
+        .split('\n').map(s => s.trim()).filter(Boolean);
+      if (!tableApps.length || !keywords.length) {
+        alert('Добавьте приложения и введите ключи'); return;
+      }
+      const el = document.getElementById('bulkResult');
+      el.innerHTML = '<p class="muted">строим таблицу (по запросу на каждый ключ)…</p>';
+      const d = await fetch(API + '/bulk', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          platform: platformOf(),
+          country: document.getElementById('geo').value,
+          language: document.getElementById('lang').value,
+          appIds: tableApps.map(a => a.appId),
+          keywords,
+        }),
+      }).then(r => r.json());
+      if (d.error) { el.innerHTML = 'Ошибка: ' + d.error; return; }
+      el.innerHTML = `<table style="margin-top:10px"><tr>
+        <th>Ключ</th><th>Объём</th><th>Рез-ты</th>
+        ${d.apps.map(a => `<th>${a.title}</th>`).join('')}</tr>
+        ${d.rows.map(row => `<tr>
+          <td>${row.term}</td>
+          <td>${row.volume}</td>
+          <td>${row.totalResults}</td>
+          ${row.ranks.map(r => `<td class="${r ? (r <= 10 ? 'rank-top' : '') : 'rank-none'}">
+            ${r ? '#' + r : '—'}</td>`).join('')}
+        </tr>`).join('')}
+        </table>`;
+    }
 
     const LANG_NAMES = { en: 'English', ru: 'Русский', uk: 'Українська', de: 'Deutsch',
       fr: 'Français', es: 'Español', it: 'Italiano', pl: 'Polski' };
@@ -113,6 +177,7 @@
       loadChart();
     }
     loadLanguages();
+    renderTableApps();
 
     async function findApps() {
       const q = document.getElementById('appQuery').value.trim();
@@ -123,12 +188,14 @@
       const apps = await fetch(API + '/apps/search?q=' + encodeURIComponent(q)
         + '&country=' + geo + '&platform=' + platformOf()).then(r => r.json());
       if (!apps.length) { el.innerHTML = '<p class="muted">ничего не найдено</p>'; return; }
-      el.innerHTML = '<p class="muted">👇 Кликните приложение, чтобы посмотреть его позиции по ключам</p>'
+      el.innerHTML = '<p class="muted">👇 Кликните приложение для метрик по ключам, либо «+ в таблицу» для массового режима</p>'
         + apps.map(a => `
-        <div class="app-row" data-id="${a.appId}" data-title="${a.title.replace(/"/g,'&quot;')}"
-             onclick="pickApp(this)">
-          <img src="${a.icon}" alt="" />
-          <div><div>${a.title}</div><div class="muted">${a.developer}</div></div>
+        <div class="app-row" data-id="${a.appId}" data-title="${a.title.replace(/"/g,'&quot;')}">
+          <img src="${a.icon}" alt="" onclick="pickApp(this.parentNode)" style="cursor:pointer" />
+          <div onclick="pickApp(this.parentNode)" style="cursor:pointer;flex:1">
+            <div>${a.title}</div><div class="muted">${a.developer}</div></div>
+          <button onclick="addToTable('${a.appId}', this.parentNode.dataset.title)"
+            style="background:#34c759">+ в таблицу</button>
         </div>`).join('');
     }
 

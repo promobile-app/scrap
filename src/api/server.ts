@@ -170,6 +170,64 @@ app.get<{ Params: { id: string; kw: string } }>(
   },
 );
 
+// Массовая таблица: список приложений × список ключей -> матрица позиций.
+app.post<{
+  Body: {
+    platform?: string;
+    country?: string;
+    language?: string;
+    appIds: string[];
+    keywords: string[];
+  };
+}>('/bulk', async (req, reply) => {
+  const { appIds = [], keywords = [] } = req.body;
+  if (appIds.length === 0 || keywords.length === 0) {
+    return reply.code(400).send({ error: 'appIds and keywords required' });
+  }
+  const country = req.body.country ?? config.defaultCountry;
+  const language = req.body.language;
+  const android = req.body.platform === 'android';
+
+  // Логарифмическая оценка объёма по насыщенности выдачи (5-100).
+  const volumeFromResults = (total: number) =>
+    Math.round(5 + Math.min(1, Math.log10(total + 1) / Math.log10(251)) * 95);
+
+  // Названия приложений (по одному lookup на приложение).
+  const apps = await Promise.all(
+    appIds.map(async (id) => {
+      if (android) {
+        const a = await gpAppLookup(id, country);
+        return { appId: id, title: a?.title ?? id };
+      }
+      const a = await appLookup(Number(id), country);
+      return { appId: id, title: a?.title ?? id };
+    }),
+  );
+
+  // Один поиск на ключ; внутри ищем позиции всех приложений.
+  const rows = [];
+  for (const term of keywords) {
+    try {
+      const ids = android
+        ? (await gpSearch(term, country, 250)).map((a) => a.appId)
+        : await nativeSearchIds(term, country, language);
+      rows.push({
+        term,
+        totalResults: ids.length,
+        volume: volumeFromResults(ids.length),
+        ranks: appIds.map((id) => {
+          const idx = ids.indexOf(String(id));
+          return idx === -1 ? null : idx + 1;
+        }),
+      });
+    } catch {
+      rows.push({ term, totalResults: 0, volume: 0, ranks: appIds.map(() => null) });
+    }
+  }
+
+  return { platform: android ? 'android' : 'ios', country, apps, rows };
+});
+
 // --- Ключевое слово ---------------------------------------------------------
 
 // Сводка по ключу: volume, difficulty, топ-приложения (онлайн-расчёт).
