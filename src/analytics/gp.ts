@@ -1,4 +1,4 @@
-import { gpSearch, gpSuggest } from '../scrapers/googleplay.js';
+import { gpSearch, gpSuggest, gpAppLookup } from '../scrapers/googleplay.js';
 
 export interface VolumeResult {
   score: number;
@@ -36,16 +36,26 @@ export async function gpEstimateVolume(term: string, country = 'us'): Promise<Vo
   };
 }
 
-/** Оценка сложности продвижения по ключу в Google Play. */
+/**
+ * Оценка сложности продвижения по ключу в Google Play.
+ * Поиск Play Store не отдаёт число отзывов — догружаем детали топ-приложений.
+ */
 export async function gpEstimateDifficulty(
   term: string,
   country = 'us',
 ): Promise<DifficultyResult> {
   const results = await gpSearch(term.toLowerCase().trim(), country, 50);
-  const top = results.slice(0, 10);
+  const top = results.slice(0, 8);
   if (top.length === 0) return { score: 5, competitors: 0, avgRatings: 0 };
 
-  const avgRatings = top.reduce((s, a) => s + a.ratings, 0) / top.length;
+  const details = await Promise.all(top.map((a) => gpAppLookup(a.appId, country)));
+  const ratingCounts = details
+    .map((d) => d?.ratings ?? 0)
+    .filter((n) => n > 0);
+  const avgRatings =
+    ratingCounts.length > 0
+      ? ratingCounts.reduce((s, n) => s + n, 0) / ratingCounts.length
+      : 0;
   const strength = Math.min(1, Math.log10(avgRatings + 1) / 7);
   return {
     score: Math.round(5 + strength * 95),
