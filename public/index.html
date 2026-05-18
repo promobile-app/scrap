@@ -132,7 +132,8 @@
     function pickApp(row) {
       document.querySelectorAll('.app-row').forEach(r => r.classList.remove('sel'));
       row.classList.add('sel');
-      selectedApp = { id: Number(row.dataset.id), title: row.dataset.title };
+      // id хранится строкой: App Store — числовой, Google Play — имя пакета.
+      selectedApp = { id: row.dataset.id, title: row.dataset.title };
       document.getElementById('discoverBox').style.display = 'block';
       document.getElementById('selApp').textContent =
         ' выбрано: ' + selectedApp.title;
