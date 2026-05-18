@@ -1,17 +1,18 @@
-import { collectAll } from './collect.js';
+import { recheckAll } from './recheck.js';
 import { pool } from '../db/pool.js';
 
-const DAY_MS = 24 * 60 * 60 * 1000;
+const RECHECK_MS = 3 * 60 * 60 * 1000; // каждые 3 часа
 
 /**
- * Простой планировщик: запускает полный сбор сразу и далее раз в сутки.
- * Для продакшена можно заменить на cron или очередь задач.
+ * Планировщик автозамеров: переснимает все проверявшиеся связки
+ * «приложение + ключ» сразу при старте и далее каждые 3 часа,
+ * накапливая историю для графиков.
  */
 async function main(): Promise<void> {
-  await collectAll().catch((e) => console.error('collect failed:', e));
+  await recheckAll().catch((e) => console.error('recheck failed:', e));
   setInterval(() => {
-    collectAll().catch((e) => console.error('collect failed:', e));
-  }, DAY_MS);
+    recheckAll().catch((e) => console.error('recheck failed:', e));
+  }, RECHECK_MS);
 }
 
 main().catch(async (err) => {
