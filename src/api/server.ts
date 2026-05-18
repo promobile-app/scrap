@@ -257,15 +257,28 @@ app.post<{
       const ids = android
         ? (await gpSearch(term, country, 250)).map((a) => a.appId)
         : await nativeSearchIds(term, country, language);
-      rows.push({
-        term,
-        totalResults: ids.length,
-        volume: volumeFromResults(ids.length),
-        ranks: appIds.map((id) => {
-          const idx = ids.indexOf(String(id));
-          return idx === -1 ? null : idx + 1;
-        }),
+      const vol = volumeFromResults(ids.length);
+      const ranks = appIds.map((id) => {
+        const idx = ids.indexOf(String(id));
+        return idx === -1 ? null : idx + 1;
       });
+      rows.push({ term, totalResults: ids.length, volume: vol, ranks });
+
+      // Каждая ячейка таблицы — это замер «приложение + ключ»: пишем в историю.
+      for (let i = 0; i < appIds.length; i++) {
+        await saveMetricCheck({
+          platform: android ? 'android' : 'ios',
+          appId: String(appIds[i]),
+          appTitle: apps[i]!.title,
+          term: term.toLowerCase().trim(),
+          country,
+          language: android ? null : (language ?? null),
+          rank: ranks[i]!,
+          totalResults: ids.length,
+          volume: vol,
+          difficulty: 0,
+        }).catch(() => {});
+      }
     } catch {
       rows.push({ term, totalResults: 0, volume: 0, ranks: appIds.map(() => null) });
     }
