@@ -35,7 +35,11 @@
     <div class="card">
       <h2>Подбор ключей по приложению</h2>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <input id="appQuery" placeholder="название приложения" size="26" />
+        <select id="platform" onchange="onPlatformChange()">
+          <option value="ios">🍎 App Store</option>
+          <option value="android">🤖 Google Play</option>
+        </select>
+        <input id="appQuery" placeholder="название приложения" size="22" />
         <select id="geo" onchange="loadLanguages()">
           <option value="us">🇺🇸 США</option>
           <option value="gb">🇬🇧 Великобритания</option>
@@ -90,12 +94,22 @@
     const LANG_NAMES = { en: 'English', ru: 'Русский', uk: 'Українська', de: 'Deutsch',
       fr: 'Français', es: 'Español', it: 'Italiano', pl: 'Polski' };
 
+    function platformOf() { return document.getElementById('platform').value; }
+
     async function loadLanguages() {
       const geo = document.getElementById('geo').value;
       const sel = document.getElementById('lang');
       const d = await fetch(API + '/languages?country=' + geo).then(r => r.json());
       sel.innerHTML = d.languages
         .map(l => `<option value="${l}">${LANG_NAMES[l] || l}</option>`).join('');
+    }
+
+    function onPlatformChange() {
+      // У Google Play язык витрины задаётся страной — селектор языка не нужен.
+      const android = platformOf() === 'android';
+      document.getElementById('lang').style.display = android ? 'none' : '';
+      document.getElementById('discoverBtn').style.display = android ? 'none' : '';
+      loadChart();
     }
     loadLanguages();
 
@@ -105,8 +119,8 @@
       if (!q) return;
       const el = document.getElementById('appList');
       el.innerHTML = 'поиск…';
-      const apps = await fetch(API + '/apps/search?q=' + encodeURIComponent(q) + '&country=' + geo)
-        .then(r => r.json());
+      const apps = await fetch(API + '/apps/search?q=' + encodeURIComponent(q)
+        + '&country=' + geo + '&platform=' + platformOf()).then(r => r.json());
       el.innerHTML = apps.map(a => `
         <div class="app-row" data-id="${a.appId}" data-title="${a.title.replace(/"/g,'&quot;')}"
              onclick="pickApp(this)">
@@ -133,8 +147,9 @@
       const lang = document.getElementById('lang').value;
       const el = document.getElementById('metricsResult');
       el.innerHTML = '<p class="muted">считаем метрики…</p>';
-      const d = await fetch(API + '/apps/' + selectedApp.id + '/metrics?country=' + geo
-        + '&language=' + lang + '&term=' + encodeURIComponent(term)).then(r => r.json());
+      const d = await fetch(API + '/apps/' + encodeURIComponent(selectedApp.id)
+        + '/metrics?country=' + geo + '&language=' + lang + '&platform=' + platformOf()
+        + '&term=' + encodeURIComponent(term)).then(r => r.json());
       if (d.error) { el.innerHTML = 'Ошибка: ' + d.error; return; }
       el.innerHTML = `
         <div style="margin:14px 0">
@@ -206,7 +221,9 @@
     }
 
     async function loadChart() {
-      const d = await fetch(API + '/charts').then(r => r.json());
+      const geo = document.getElementById('geo').value;
+      const d = await fetch(API + '/charts?country=' + geo + '&platform=' + platformOf())
+        .then(r => r.json());
       document.getElementById('chart').innerHTML =
         '<table><tr><th>#</th><th>Приложение</th><th>Разработчик</th></tr>' +
         d.slice(0, 20).map(e => `<tr><td>${e.position}</td><td>${e.title}</td><td>${e.developer}</td></tr>`).join('') +

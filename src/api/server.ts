@@ -7,6 +7,8 @@ import { config } from '../config.js';
 import { query } from '../db/pool.js';
 import { appLookup, searchApps, getRank, lookupApps } from '../scrapers/appstore.js';
 import { nativeSearchIds, storeLanguages } from '../scrapers/native.js';
+import { gpSearch, gpAppLookup, gpTopChart } from '../scrapers/googleplay.js';
+import { gpEstimateVolume, gpEstimateDifficulty } from '../analytics/gp.js';
 import { topChart } from '../scrapers/charts.js';
 import { estimateVolume } from '../analytics/volume.js';
 import { estimateDifficulty } from '../analytics/difficulty.js';
@@ -25,15 +27,21 @@ await app.register(fastifyStatic, { root: join(projectRoot, 'public') });
 // --- Приложение -------------------------------------------------------------
 
 // Поиск приложений по названию (для выбора приложения в дашборде).
-app.get<{ Querystring: { q: string; country?: string } }>(
+app.get<{ Querystring: { q: string; country?: string; platform?: string } }>(
   '/apps/search',
   async (req, reply) => {
     if (!req.query.q) return reply.code(400).send({ error: 'q required' });
-    const results = await searchApps(
-      req.query.q,
-      req.query.country ?? config.defaultCountry,
-      15,
-    );
+    const country = req.query.country ?? config.defaultCountry;
+    if (req.query.platform === 'android') {
+      const results = await gpSearch(req.query.q, country, 15);
+      return results.map((a) => ({
+        appId: a.appId,
+        title: a.title,
+        developer: a.developer,
+        icon: a.icon,
+      }));
+    }
+    const results = await searchApps(req.query.q, country, 15);
     return results.map((a) => ({
       appId: a.appId,
       title: a.title,
@@ -46,14 +54,45 @@ app.get<{ Querystring: { q: string; country?: string } }>(
 // Метрики связки «приложение + гео + конкретный ключ».
 app.get<{
   Params: { id: string };
-  Querystring: { term: string; country?: string; language?: string };
+  Querystring: { term: string; country?: string; language?: string; platform?: string };
 }>('/apps/:id/metrics', async (req, reply) => {
     const term = req.query.term;
     if (!term) return reply.code(400).send({ error: 'term required' });
-    const appId = Number(req.params.id);
     const country = req.query.country ?? config.defaultCountry;
     const language = req.query.language;
 
+    // --- Google Play ---
+    if (req.query.platform === 'android') {
+      const gpId = req.params.id;
+      const [gApp, gpResults, gVolume, gDifficulty] = await Promise.all([
+        gpAppLookup(gpId, country),
+        gpSearch(term, country, 250),
+        gpEstimateVolume(term, country),
+        gpEstimateDifficulty(term, country),
+      ]);
+      if (!gApp) return reply.code(404).send({ error: 'app not found' });
+      const gIdx = gpResults.findIndex((a) => a.appId === gpId);
+      return {
+        app: { appId: gApp.appId, title: gApp.title, developer: gApp.developer, icon: gApp.icon },
+        term,
+        country,
+        platform: 'android',
+        rank: gIdx === -1 ? null : gIdx + 1,
+        inTop10: gIdx !== -1 && gIdx < 10,
+        totalResults: gpResults.length,
+        volume: gVolume,
+        difficulty: { score: gDifficulty.score, competitors: gDifficulty.competitors },
+        topApps: gpResults.slice(0, 10).map((a, i) => ({
+          position: i + 1,
+          appId: a.appId,
+          title: a.title,
+          isTarget: a.appId === gpId,
+        })),
+      };
+    }
+
+    // --- App Store ---
+    const appId = Number(req.params.id);
     const [app, ids, volume, difficulty] = await Promise.all([
       appLookup(appId, country),
       nativeSearchIds(term, country, language),
@@ -66,6 +105,7 @@ app.get<{
     const topApps = await lookupApps(ids.slice(0, 10), country);
     return {
       app: { appId, title: app.title, developer: app.developer, icon: app.icon },
+      platform: 'ios',
       term,
       country,
       language: language ?? storeLanguages(country)[0],
@@ -152,10 +192,20 @@ app.get<{ Querystring: { term: string; country?: string } }>(
 
 // --- Чарты ------------------------------------------------------------------
 
-app.get<{ Querystring: { type?: 'top-free' | 'top-paid'; country?: string } }>(
+app.get<{ Querystring: { type?: 'top-free' | 'top-paid'; country?: string; platform?: string } }>(
   '/charts',
   async (req) => {
-    return topChart(req.query.type ?? 'top-free', req.query.country ?? config.defaultCountry);
+    const country = req.query.country ?? config.defaultCountry;
+    if (req.query.platform === 'android') {
+      const list = await gpTopChart(country, 50);
+      return list.map((a, i) => ({
+        position: i + 1,
+        appId: a.appId,
+        title: a.title,
+        developer: a.developer,
+      }));
+    }
+    return topChart(req.query.type ?? 'top-free', country);
   },
 );
 

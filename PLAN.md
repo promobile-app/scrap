@@ -82,6 +82,15 @@ Apple Search Ads. До его подключения используем эвр
 - Модуль `src/scrapers/native.ts`. На «кредит»/UA: 213 результатов (FoxData ~248).
 - Метаданные приложений из топа подтягиваются батч-lookup'ом (`lookupApps`).
 
+## Google Play (добавлено)
+- Скрейпер `src/scrapers/googleplay.ts` на базе `google-play-scraper`
+  (официального API у Play Store нет — парсинг веб-страниц).
+- Аналитика: `src/analytics/gp.ts` — оценка Volume и Difficulty.
+- API: параметр `?platform=android` для `/apps/search`, `/apps/:id/metrics`,
+  `/charts`. По умолчанию `ios`.
+- Дашборд: переключатель 🍎 App Store / 🤖 Google Play.
+- appId в Google Play — имя пакета (строка), напр. `ua.moneyveo`.
+
 ## Прогресс
 - 2026-05-18: план создан.
 - 2026-05-18: Этапы 1–7 реализованы (MVP):
