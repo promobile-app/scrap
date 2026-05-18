@@ -15,7 +15,7 @@ import { estimateDifficulty } from '../analytics/difficulty.js';
 import { discoverKeywords } from '../analytics/discovery.js';
 import {
   upsertApp, upsertKeyword, linkAppKeyword,
-  saveMetricCheck, getMetricHistory,
+  saveMetricCheck, getMetricHistory, distinctMetricTargets,
 } from '../db/repo.js';
 
 const app = Fastify({ logger: true });
@@ -161,6 +161,17 @@ app.get<{
     req.query.country ?? config.defaultCountry,
   );
   return { history };
+});
+
+// Все сохранённые связки «приложение + ключ» с их историей (для дашборда).
+app.get('/history/all', async () => {
+  const targets = await distinctMetricTargets();
+  const items = [];
+  for (const t of targets) {
+    const history = await getMetricHistory(t.platform, t.appId, t.term, t.country);
+    items.push({ ...t, history });
+  }
+  return { items };
 });
 
 // FoxData-флоу: приложение + гео -> ключевые слова с позициями.
