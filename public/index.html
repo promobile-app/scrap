@@ -122,7 +122,9 @@
       el.innerHTML = 'поиск…';
       const apps = await fetch(API + '/apps/search?q=' + encodeURIComponent(q)
         + '&country=' + geo + '&platform=' + platformOf()).then(r => r.json());
-      el.innerHTML = apps.map(a => `
+      if (!apps.length) { el.innerHTML = '<p class="muted">ничего не найдено</p>'; return; }
+      el.innerHTML = '<p class="muted">👇 Кликните приложение, чтобы посмотреть его позиции по ключам</p>'
+        + apps.map(a => `
         <div class="app-row" data-id="${a.appId}" data-title="${a.title.replace(/"/g,'&quot;')}"
              onclick="pickApp(this)">
           <img src="${a.icon}" alt="" />
@@ -135,10 +137,14 @@
       row.classList.add('sel');
       // id хранится строкой: App Store — числовой, Google Play — имя пакета.
       selectedApp = { id: row.dataset.id, title: row.dataset.title };
-      document.getElementById('discoverBox').style.display = 'block';
+      const box = document.getElementById('discoverBox');
+      box.style.display = 'block';
       document.getElementById('selApp').textContent =
         ' выбрано: ' + selectedApp.title;
       document.getElementById('discoverResult').innerHTML = '';
+      document.getElementById('metricsResult').innerHTML = '';
+      box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      document.getElementById('oneKw').focus();
     }
 
     async function checkKeyword() {
