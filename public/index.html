@@ -252,6 +252,18 @@
 
     <div class="card">
       <div class="card-head">
+        <div class="card-ico">📈</div>
+        <div>
+          <h2>История замеров</h2>
+          <p class="sub">Сохранённые проверки и динамика позиции — автозамер каждые 3 часа</p>
+        </div>
+        <button class="theme-btn" style="margin-left:auto" onclick="loadHistoryAll()">Обновить</button>
+      </div>
+      <div id="historyList">загрузка…</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
         <div class="card-ico">🔍</div>
         <div>
           <h2>Анализ одного ключевого слова</h2>
@@ -454,6 +466,36 @@
           ${dots}
         </svg></div>`;
     }
+
+    const FLAGS = { us:'🇺🇸', gb:'🇬🇧', de:'🇩🇪', ua:'🇺🇦', ru:'🇷🇺', fr:'🇫🇷' };
+
+    async function loadHistoryAll() {
+      const el = document.getElementById('historyList');
+      el.innerHTML = 'загрузка…';
+      let d;
+      try { d = await fetch(API + '/history/all').then(r => r.json()); }
+      catch { el.innerHTML = '<p class="muted">не удалось загрузить</p>'; return; }
+      const items = d.items || [];
+      if (!items.length) {
+        el.innerHTML = '<p class="muted">Пока нет сохранённых замеров. Проверьте связку «приложение + ключ» через «Метрики по ключу» — она попадёт сюда и в автозамер.</p>';
+        return;
+      }
+      el.innerHTML = items.map(it => {
+        const last = it.history[it.history.length - 1] || {};
+        const r = last.rank;
+        return `<div style="padding:14px 0;border-top:1px solid var(--line)">
+          <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
+            <b>${it.appTitle || it.appId}</b>
+            <span class="muted">${it.platform === 'android' ? '🤖' : '🍎'}
+              ${FLAGS[it.country] || it.country.toUpperCase()} · ключ «${it.term}»</span>
+            <span style="margin-left:auto" class="${r ? (r <= 10 ? 'rank-top' : '') : 'rank-none'}">
+              <b style="font-size:18px">${r ? '#' + r : '—'}</b></span>
+          </div>
+          ${chartSvg(it.history)}
+        </div>`;
+      }).join('');
+    }
+    loadHistoryAll();
 
     async function checkKeyword() {
       if (!selectedApp) return;
