@@ -13,7 +13,10 @@ import { topChart } from '../scrapers/charts.js';
 import { estimateVolume } from '../analytics/volume.js';
 import { estimateDifficulty } from '../analytics/difficulty.js';
 import { discoverKeywords } from '../analytics/discovery.js';
-import { upsertApp, upsertKeyword, linkAppKeyword } from '../db/repo.js';
+import {
+  upsertApp, upsertKeyword, linkAppKeyword,
+  saveMetricCheck, getMetricHistory,
+} from '../db/repo.js';
 
 const app = Fastify({ logger: true });
 
@@ -76,12 +79,19 @@ app.get<{
       ]);
       if (!gApp) return reply.code(404).send({ error: 'app not found' });
       const gIdx = gpResults.findIndex((a) => a.appId === gpId);
+      const gRank = gIdx === -1 ? null : gIdx + 1;
+      await saveMetricCheck({
+        platform: 'android', appId: gpId, appTitle: gApp.title,
+        term: term.toLowerCase().trim(), country, language: null,
+        rank: gRank, totalResults: gpResults.length,
+        volume: gVolume.score, difficulty: gDifficulty.score,
+      }).catch(() => {});
       return {
         app: { appId: gApp.appId, title: gApp.title, developer: gApp.developer, icon: gApp.icon },
         term,
         country,
         platform: 'android',
-        rank: gIdx === -1 ? null : gIdx + 1,
+        rank: gRank,
         inTop10: gIdx !== -1 && gIdx < 10,
         totalResults: gpResults.length,
         volume: gVolume,
@@ -106,14 +116,22 @@ app.get<{
     if (!app) return reply.code(404).send({ error: 'app not found' });
 
     const idx = ids.indexOf(String(appId));
+    const iRank = idx === -1 ? null : idx + 1;
     const topApps = await lookupApps(ids.slice(0, 10), country);
+    await saveMetricCheck({
+      platform: 'ios', appId: String(appId), appTitle: app.title,
+      term: term.toLowerCase().trim(), country,
+      language: language ?? storeLanguages(country)[0] ?? null,
+      rank: iRank, totalResults: ids.length,
+      volume: volume.score, difficulty: difficulty.score,
+    }).catch(() => {});
     return {
       app: { appId, title: app.title, developer: app.developer, icon: app.icon },
       platform: 'ios',
       term,
       country,
       language: language ?? storeLanguages(country)[0],
-      rank: idx === -1 ? null : idx + 1,
+      rank: iRank,
       inTop10: idx !== -1 && idx < 10,
       totalResults: ids.length,
       volume,
@@ -127,6 +145,23 @@ app.get<{
     };
   },
 );
+
+// История проверок «приложение + ключ» во времени (для графика).
+app.get<{
+  Querystring: { platform?: string; appId: string; term: string; country?: string };
+}>('/history', async (req, reply) => {
+  if (!req.query.appId || !req.query.term) {
+    return reply.code(400).send({ error: 'appId and term required' });
+  }
+  const platform = req.query.platform === 'android' ? 'android' : 'ios';
+  const history = await getMetricHistory(
+    platform,
+    req.query.appId,
+    req.query.term,
+    req.query.country ?? config.defaultCountry,
+  );
+  return { history };
+});
 
 // FoxData-флоу: приложение + гео -> ключевые слова с позициями.
 app.get<{ Params: { id: string }; Querystring: { country?: string } }>(
