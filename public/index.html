@@ -473,27 +473,42 @@
       const el = document.getElementById('historyList');
       el.innerHTML = 'загрузка…';
       let d;
-      try { d = await fetch(API + '/history/all').then(r => r.json()); }
-      catch { el.innerHTML = '<p class="muted">не удалось загрузить</p>'; return; }
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 12000);
+        const res = await fetch(API + '/history/all', { signal: ctrl.signal });
+        clearTimeout(timer);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        d = await res.json();
+      } catch (e) {
+        el.innerHTML = `<p class="muted">Не удалось загрузить историю (${e.message || e}).<br>
+          Откройте дашборд напрямую: <a href="http://localhost:3000" style="color:var(--brand)">http://localhost:3000</a></p>`;
+        return;
+      }
       const items = d.items || [];
       if (!items.length) {
         el.innerHTML = '<p class="muted">Пока нет сохранённых замеров. Проверьте связку «приложение + ключ» через «Метрики по ключу» — она попадёт сюда и в автозамер.</p>';
         return;
       }
-      el.innerHTML = items.map(it => {
-        const last = it.history[it.history.length - 1] || {};
-        const r = last.rank;
-        return `<div style="padding:14px 0;border-top:1px solid var(--line)">
-          <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
-            <b>${it.appTitle || it.appId}</b>
-            <span class="muted">${it.platform === 'android' ? '🤖' : '🍎'}
-              ${FLAGS[it.country] || it.country.toUpperCase()} · ключ «${it.term}»</span>
-            <span style="margin-left:auto" class="${r ? (r <= 10 ? 'rank-top' : '') : 'rank-none'}">
-              <b style="font-size:18px">${r ? '#' + r : '—'}</b></span>
-          </div>
-          ${chartSvg(it.history)}
-        </div>`;
-      }).join('');
+      try {
+        el.innerHTML = items.map(it => {
+          const hist = it.history || [];
+          const last = hist[hist.length - 1] || {};
+          const r = last.rank;
+          return `<div style="padding:14px 0;border-top:1px solid var(--line)">
+            <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
+              <b>${it.appTitle || it.appId}</b>
+              <span class="muted">${it.platform === 'android' ? '🤖' : '🍎'}
+                ${FLAGS[it.country] || (it.country || '').toUpperCase()} · ключ «${it.term}»</span>
+              <span style="margin-left:auto" class="${r ? (r <= 10 ? 'rank-top' : '') : 'rank-none'}">
+                <b style="font-size:18px">${r ? '#' + r : '—'}</b></span>
+            </div>
+            ${chartSvg(hist)}
+          </div>`;
+        }).join('');
+      } catch (e) {
+        el.innerHTML = '<p class="muted">Ошибка отрисовки: ' + (e.message || e) + '</p>';
+      }
     }
     loadHistoryAll();
 
