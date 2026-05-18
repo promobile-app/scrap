@@ -105,6 +105,24 @@ export async function saveMetricCheck(m: MetricCheck): Promise<void> {
   );
 }
 
+/** Уникальные связки «приложение + ключ», которые уже проверялись — для автозамера. */
+export async function distinctMetricTargets(): Promise<
+  {
+    platform: string;
+    appId: string;
+    appTitle: string;
+    term: string;
+    country: string;
+    language: string | null;
+  }[]
+> {
+  return query(
+    `SELECT DISTINCT platform, app_id AS "appId", app_title AS "appTitle",
+            term, country, language
+     FROM metric_checks`,
+  );
+}
+
 /** История проверок по связке «приложение + ключ» во времени. */
 export async function getMetricHistory(
   platform: string,

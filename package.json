@@ -8,6 +8,7 @@
     "dev": "tsx watch src/api/server.ts",
     "start": "node dist/api/server.js",
     "scrape": "tsx src/cli.ts",
+    "scheduler": "tsx src/jobs/scheduler.ts",
     "db:migrate": "tsx src/db/migrate.ts",
     "typecheck": "tsc --noEmit"
   },
