@@ -22,7 +22,11 @@ await app.register(fastifyCors, { origin: true });
 
 // Статика дашборда (public/ в корне проекта).
 const projectRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-await app.register(fastifyStatic, { root: join(projectRoot, 'public') });
+// cacheControl выключен — дашборд всегда отдаётся свежим (без устаревшего кеша).
+await app.register(fastifyStatic, {
+  root: join(projectRoot, 'public'),
+  cacheControl: false,
+});
 
 // --- Приложение -------------------------------------------------------------
 
