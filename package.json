@@ -1,0 +1,29 @@
+{
+  "name": "aso-service",
+  "version": "0.1.0",
+  "description": "ASO analytics service for Apple App Store (FoxData-like)",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/api/server.ts",
+    "start": "node dist/api/server.js",
+    "scrape": "tsx src/cli.ts",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.2.0",
+    "@fastify/static": "^9.1.3",
+    "dotenv": "^16.4.5",
+    "fastify": "^5.2.0",
+    "pg": "^8.13.1",
+    "playwright": "^1.60.0",
+    "undici": "^7.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/pg": "^8.11.10",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

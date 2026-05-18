@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ASO Dashboard</title>
+  <style>
+    body { font-family: -apple-system, system-ui, sans-serif; margin: 0; background: #f5f5f7; color: #1d1d1f; }
+    header { background: #1d1d1f; color: #fff; padding: 16px 24px; }
+    header h1 { margin: 0; font-size: 18px; }
+    main { max-width: 900px; margin: 24px auto; padding: 0 16px; }
+    .card { background: #fff; border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+    .card h2 { margin-top: 0; font-size: 15px; }
+    input { padding: 8px 10px; border: 1px solid #ccc; border-radius: 8px; font-size: 14px; }
+    button { padding: 8px 14px; border: 0; border-radius: 8px; background: #0071e3; color: #fff; font-size: 14px; cursor: pointer; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #eee; }
+    .metric { display: inline-block; margin-right: 24px; }
+    .metric .val { font-size: 28px; font-weight: 600; }
+    .metric .lbl { font-size: 12px; color: #86868b; }
+    .muted { color: #86868b; font-size: 12px; }
+    select { padding: 8px 10px; border: 1px solid #ccc; border-radius: 8px; font-size: 14px; }
+    .app-row { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; cursor: pointer; }
+    .app-row:hover { background: #f0f0f2; }
+    .app-row img { width: 40px; height: 40px; border-radius: 9px; }
+    .app-row.sel { background: #e3f0ff; }
+    .bar { height: 8px; border-radius: 4px; background: #0071e3; }
+    .rank-top { color: #1a8d3a; font-weight: 600; }
+    .rank-none { color: #c0c0c5; }
+  </style>
+</head>
+<body>
+  <header><h1>ASO Dashboard — App Store</h1></header>
+  <main>
+    <div class="card">
+      <h2>Подбор ключей по приложению</h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <input id="appQuery" placeholder="название приложения" size="26" />
+        <select id="geo" onchange="loadLanguages()">
+          <option value="us">🇺🇸 США</option>
+          <option value="gb">🇬🇧 Великобритания</option>
+          <option value="de">🇩🇪 Германия</option>
+          <option value="ua">🇺🇦 Украина</option>
+          <option value="ru">🇷🇺 Россия</option>
+        </select>
+        <select id="lang" title="Язык витрины"></select>
+        <button onclick="findApps()">Найти приложение</button>
+      </div>
+      <div id="appList"></div>
+      <div id="discoverBox" style="display:none;margin-top:14px">
+        <div class="muted" id="selApp" style="margin-bottom:8px"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <input id="oneKw" placeholder="конкретный ключ" size="22" />
+          <button onclick="checkKeyword()">Метрики по ключу</button>
+          <span class="muted">или</span>
+          <button id="discoverBtn" onclick="discover()">Показать все ключи</button>
+        </div>
+        <div id="metricsResult"></div>
+        <div id="discoverResult"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Анализ одного ключевого слова</h2>
+      <input id="kw" placeholder="например: photo editor" size="30" />
+      <button onclick="analyze()">Анализировать</button>
+      <div id="kwResult"></div>
+    </div>
+
+    <div class="card">
+      <h2>Отслеживание приложения</h2>
+      <input id="appId" placeholder="App ID" size="14" />
+      <input id="trackKw" placeholder="ключевое слово" size="20" />
+      <button onclick="track()">Отслеживать</button>
+      <div id="trackResult" class="muted"></div>
+    </div>
+
+    <div class="card">
+      <h2>Топ-чарт (Top Free, US)</h2>
+      <div id="chart">загрузка…</div>
+    </div>
+  </main>
+
+  <script>
+    // Если дашборд открыт не с самого API (например в панели предпросмотра),
+    // обращаемся к API напрямую на localhost:3000.
+    const API = location.port === '3000' ? '' : 'http://localhost:3000';
+    let selectedApp = null;
+
+    const LANG_NAMES = { en: 'English', ru: 'Русский', uk: 'Українська', de: 'Deutsch',
+      fr: 'Français', es: 'Español', it: 'Italiano', pl: 'Polski' };
+
+    async function loadLanguages() {
+      const geo = document.getElementById('geo').value;
+      const sel = document.getElementById('lang');
+      const d = await fetch(API + '/languages?country=' + geo).then(r => r.json());
+      sel.innerHTML = d.languages
+        .map(l => `<option value="${l}">${LANG_NAMES[l] || l}</option>`).join('');
+    }
+    loadLanguages();
+
+    async function findApps() {
+      const q = document.getElementById('appQuery').value.trim();
+      const geo = document.getElementById('geo').value;
+      if (!q) return;
+      const el = document.getElementById('appList');
+      el.innerHTML = 'поиск…';
+      const apps = await fetch(API + '/apps/search?q=' + encodeURIComponent(q) + '&country=' + geo)
+        .then(r => r.json());
+      el.innerHTML = apps.map(a => `
+        <div class="app-row" data-id="${a.appId}" data-title="${a.title.replace(/"/g,'&quot;')}"
+             onclick="pickApp(this)">
+          <img src="${a.icon}" alt="" />
+          <div><div>${a.title}</div><div class="muted">${a.developer}</div></div>
+        </div>`).join('');
+    }
+
+    function pickApp(row) {
+      document.querySelectorAll('.app-row').forEach(r => r.classList.remove('sel'));
+      row.classList.add('sel');
+      selectedApp = { id: Number(row.dataset.id), title: row.dataset.title };
+      document.getElementById('discoverBox').style.display = 'block';
+      document.getElementById('selApp').textContent =
+        ' выбрано: ' + selectedApp.title;
+      document.getElementById('discoverResult').innerHTML = '';
+    }
+
+    async function checkKeyword() {
+      if (!selectedApp) return;
+      const term = document.getElementById('oneKw').value.trim();
+      if (!term) return;
+      const geo = document.getElementById('geo').value;
+      const lang = document.getElementById('lang').value;
+      const el = document.getElementById('metricsResult');
+      el.innerHTML = '<p class="muted">считаем метрики…</p>';
+      const d = await fetch(API + '/apps/' + selectedApp.id + '/metrics?country=' + geo
+        + '&language=' + lang + '&term=' + encodeURIComponent(term)).then(r => r.json());
+      if (d.error) { el.innerHTML = 'Ошибка: ' + d.error; return; }
+      el.innerHTML = `
+        <div style="margin:14px 0">
+          <span class="metric"><div class="val ${d.rank ? (d.inTop10 ? 'rank-top' : '') : 'rank-none'}">
+            ${d.rank ? '#' + d.rank : '—'}</div><div class="lbl">Позиция «${d.term}»</div></span>
+          <span class="metric"><div class="val">${d.volume.score}</div>
+            <div class="lbl">Search Volume (${d.volume.source})</div></span>
+          <span class="metric"><div class="val">${d.difficulty.score}</div><div class="lbl">Difficulty</div></span>
+          <span class="metric"><div class="val">${d.totalResults}</div><div class="lbl">Конкурентов</div></span>
+        </div>
+        <table><tr><th>#</th><th>Топ выдачи по «${d.term}» (${d.country.toUpperCase()})</th></tr>
+        ${d.topApps.map(a => `<tr>
+          <td>${a.position}</td>
+          <td>${a.isTarget ? '<b>▶ ' + a.title + '</b>' : a.title}</td>
+        </tr>`).join('')}
+        </table>`;
+    }
+
+    async function discover() {
+      if (!selectedApp) return;
+      const geo = document.getElementById('geo').value;
+      const btn = document.getElementById('discoverBtn');
+      const el = document.getElementById('discoverResult');
+      btn.disabled = true;
+      el.innerHTML = '<p class="muted">собираем ключи (это может занять до минуты)…</p>';
+      const d = await fetch(API + '/apps/' + selectedApp.id + '/discover?country=' + geo)
+        .then(r => r.json());
+      btn.disabled = false;
+      if (d.error) { el.innerHTML = 'Ошибка: ' + d.error; return; }
+      el.innerHTML = `<p class="muted">${d.title} — гео ${d.country.toUpperCase()} — ${d.keywords.length} ключей</p>
+        <table><tr><th>Ключевое слово</th><th>Позиция</th><th>Search Volume</th><th>Конкуренция</th></tr>
+        ${d.keywords.map(k => `<tr>
+          <td>${k.term}</td>
+          <td class="${k.rank ? (k.rank <= 10 ? 'rank-top' : '') : 'rank-none'}">
+            ${k.rank ? '#' + k.rank : '—'}</td>
+          <td><div class="bar" style="width:${k.volumeScore}%"></div>
+            <span class="muted">${k.volumeScore}</span></td>
+          <td>${k.totalResults}</td>
+        </tr>`).join('')}
+        </table>`;
+    }
+
+    async function analyze() {
+      const term = document.getElementById('kw').value.trim();
+      if (!term) return;
+      const el = document.getElementById('kwResult');
+      el.innerHTML = 'загрузка…';
+      const d = await fetch(API + '/keywords?term=' + encodeURIComponent(term)).then(r => r.json());
+      el.innerHTML = `
+        <div style="margin:14px 0">
+          <span class="metric"><div class="val">${d.volume.score}</div><div class="lbl">Search Volume (${d.volume.source})</div></span>
+          <span class="metric"><div class="val">${d.difficulty.score}</div><div class="lbl">Difficulty</div></span>
+          <span class="metric"><div class="val">${d.difficulty.competitors}</div><div class="lbl">Конкурентов</div></span>
+        </div>
+        <table><tr><th>#</th><th>Приложение</th><th>App ID</th></tr>
+        ${d.topApps.map(a => `<tr><td>${a.position}</td><td>${a.title}</td><td>${a.appId}</td></tr>`).join('')}
+        </table>`;
+    }
+
+    async function track() {
+      const appId = Number(document.getElementById('appId').value);
+      const term = document.getElementById('trackKw').value.trim();
+      const el = document.getElementById('trackResult');
+      const d = await fetch(API + '/track', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appId, term: term || undefined }),
+      }).then(r => r.json());
+      el.textContent = d.error ? ('Ошибка: ' + d.error) : ('Отслеживается: ' + JSON.stringify(d.tracked));
+    }
+
+    async function loadChart() {
+      const d = await fetch(API + '/charts').then(r => r.json());
+      document.getElementById('chart').innerHTML =
+        '<table><tr><th>#</th><th>Приложение</th><th>Разработчик</th></tr>' +
+        d.slice(0, 20).map(e => `<tr><td>${e.position}</td><td>${e.title}</td><td>${e.developer}</td></tr>`).join('') +
+        '</table>';
+    }
+    loadChart();
+  </script>
+</body>
+</html>
