@@ -139,7 +139,9 @@ function renderMetric(d) {
       <b>${d.app ? d.app.title : ''}</b></div>
     <div class="mgrid">
       <div class="mtile"><div class="mv ${d.rank ? (d.inTop10 ? 'rank-top' : '') : ''}">
-        ${d.rank ? '#' + d.rank : '—'}</div><div class="ml">Позиция «${d.term}»</div></div>
+        ${d.rank ? '#' + d.rank : '—'}</div><div class="ml">${d.rank
+          ? 'Позиция «' + d.term + '»'
+          : '«' + d.term + '» — вне выдачи (топ-' + (d.totalResults ?? '?') + ')'}</div></div>
       <div class="mtile"><div class="mv">${d.volume ? d.volume.score : '—'}</div>
         <div class="ml">Объём${d.volume ? ' (' + d.volume.source + ')' : ''}</div></div>
       <div class="mtile"><div class="mv">${d.difficulty ? d.difficulty.score : '—'}</div>
