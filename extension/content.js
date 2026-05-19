@@ -162,7 +162,8 @@
     resultEl.innerHTML = `
       <div class="target">${platformIcon(d.platform)}
         <span>${flag}</span><b>${d.title}</b></div>
-      ${rows ? `<p class="muted" style="margin:0 0 8px">${ranked.length} ключей с позицией</p>
+      ${rows ? `<p class="muted" style="margin:0 0 8px">${ranked.length} ключей с позицией
+        · из ${(d.keywords || []).length} найденных</p>
         <table>
         <tr><th>Ключ</th><th class="num">Поз.</th><th class="num">Объём</th>
           <th class="num">Сложн.</th><th class="num">Конк.</th></tr>${rows}</table>
