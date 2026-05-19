@@ -246,3 +246,12 @@ export async function updateDiscoveryJob(
   params.push(id);
   await query(`UPDATE discovery_jobs SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
 }
+
+/** Последняя завершённая задача подбора по каждому приложению. */
+export async function allDoneDiscoveryJobs(): Promise<DiscoveryJobRow[]> {
+  return query<DiscoveryJobRow>(
+    `SELECT DISTINCT ON (job_key) ${JOB_COLS}
+     FROM discovery_jobs WHERE status = 'done'
+     ORDER BY job_key, created_at DESC`,
+  );
+}

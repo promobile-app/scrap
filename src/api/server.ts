@@ -13,11 +13,25 @@ import { topChart } from '../scrapers/charts.js';
 import { estimateVolume } from '../analytics/volume.js';
 import { estimateDifficulty } from '../analytics/difficulty.js';
 import { discoverKeywords } from '../analytics/discovery.js';
-import { startDiscoveryJob, getDiscoveryJobState } from '../analytics/discoverByUrl.js';
+import {
+  startDiscoveryJob, getDiscoveryJobState, type UrlKeyword,
+} from '../analytics/discoverByUrl.js';
 import {
   upsertApp, upsertKeyword, linkAppKeyword,
   saveMetricCheck, getMetricHistory, distinctMetricTargets,
+  allDoneDiscoveryJobs,
 } from '../db/repo.js';
+
+/** Экранирование значения для CSV. */
+function csvCell(v: unknown): string {
+  const s = v === null || v === undefined ? '' : String(v);
+  return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/** Сборка CSV с BOM (чтобы Excel корректно читал кириллицу). */
+function buildCsv(header: string[], rows: unknown[][]): string {
+  return '﻿' + [header, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n');
+}
 
 const app = Fastify({ logger: true });
 
@@ -208,6 +222,48 @@ app.get<{ Params: { id: string } }>(
     return state;
   },
 );
+
+// Выгрузка ключей одной задачи (одного приложения) в CSV.
+app.get<{ Params: { id: string } }>(
+  '/discover/job/:id/export.csv',
+  async (req, reply) => {
+    const state = await getDiscoveryJobState(Number(req.params.id));
+    if (!state) return reply.code(404).send({ error: 'job not found' });
+    const ranked = state.keywords.filter((k) => k.rank != null);
+    const csv = buildCsv(
+      ['Ключ', 'Позиция', 'Объём', 'Сложность', 'Конкуренты'],
+      ranked.map((k) => [k.term, k.rank, k.volume, k.difficulty, k.totalResults]),
+    );
+    reply.header('Content-Type', 'text/csv; charset=utf-8');
+    reply.header(
+      'Content-Disposition',
+      `attachment; filename="keywords-${state.appId}-${state.country}.csv"`,
+    );
+    return csv;
+  },
+);
+
+// Выгрузка ключей по всем приложениям в один CSV.
+app.get('/discover/export.csv', async (_req, reply) => {
+  const jobs = await allDoneDiscoveryJobs();
+  const rows: unknown[][] = [];
+  for (const j of jobs) {
+    for (const k of (j.keywords as UrlKeyword[]) ?? []) {
+      if (k.rank == null) continue;
+      rows.push([
+        j.platform, j.appId, j.appTitle ?? '', j.country,
+        k.term, k.rank, k.volume, k.difficulty, k.totalResults,
+      ]);
+    }
+  }
+  const csv = buildCsv(
+    ['Платформа', 'App ID', 'Приложение', 'Гео', 'Ключ', 'Позиция', 'Объём', 'Сложность', 'Конкуренты'],
+    rows,
+  );
+  reply.header('Content-Type', 'text/csv; charset=utf-8');
+  reply.header('Content-Disposition', 'attachment; filename="all-keywords.csv"');
+  return csv;
+});
 
 app.get<{ Params: { id: string } }>('/apps/:id', async (req, reply) => {
   const info = await appLookup(Number(req.params.id));

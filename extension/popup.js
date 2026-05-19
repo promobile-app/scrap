@@ -68,6 +68,23 @@ document.querySelectorAll('.tab').forEach((tab) => {
   });
 });
 
+// Скачивание CSV: тянем файл и сохраняем через blob-ссылку.
+async function exportCsv(url, filename) {
+  try {
+    const res = await fetch(url);
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  } catch (e) {
+    alert('Не удалось выгрузить CSV: ' + (e.message || e));
+  }
+}
+
 // --- Вкладка «Ключи приложения» ---
 function renderKeywords(d) {
   targetEl.style.display = 'flex';
@@ -86,8 +103,15 @@ function renderKeywords(d) {
       '<p class="muted">Приложение не ранжируется ни по одному из найденных ключей.</p>');
     return;
   }
+  const sBtn = 'padding:8px 12px;border-radius:11px;background:var(--surface-2);'
+    + 'color:var(--ink);border:1px solid var(--line);font-weight:700;font-size:12px;cursor:pointer';
+  const exportRow = running ? '' : `<div style="display:flex;gap:8px;margin:10px 0 2px">
+    <button style="${sBtn}" onclick="exportCsv('${API}/discover/job/${d.jobId}/export.csv','keywords-${d.appId}.csv')">⬇ Экспорт CSV</button>
+    <button style="${sBtn}" onclick="exportCsv('${API}/discover/export.csv','all-keywords.csv')">Все приложения</button>
+  </div>`;
   resultEl.innerHTML = `
     ${head}
+    ${exportRow}
     <div class="tw"><table>
       <tr><th>Ключ</th><th class="num">Поз.</th><th class="num">Объём</th>
         <th class="num">Сложн.</th><th class="num">Конк.</th></tr>
