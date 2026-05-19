@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "RankRadar — ключи по приложению",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Релевантные ключевые слова с метриками для открытой страницы App Store / Google Play.",
   "icons": {
     "16": "icon16.png",

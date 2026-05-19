@@ -679,7 +679,7 @@
       el.innerHTML = `
         <p class="muted" style="margin:10px 0 2px">${platformIcon(d.platform)}
           ${FLAGS[d.country] || (d.country || '').toUpperCase()} ·
-          <b>${d.title}</b> · ${ranked.length} ключей с позицией</p>
+          <b>${d.title}</b> · ${ranked.length} ключей с позицией из ${(d.keywords || []).length} найденных</p>
         <table>
           <tr><th>Ключ</th><th>Позиция</th><th>Объём</th><th>Сложность</th><th>Конкуренты</th></tr>
           ${ranked.map(k => `<tr>

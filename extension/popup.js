@@ -55,7 +55,8 @@ function renderResult(d) {
     return;
   }
   resultEl.innerHTML = `
-    <p class="muted" style="margin:8px 0">${ranked.length} ключей с позицией</p>
+    <p class="muted" style="margin:8px 0">${ranked.length} ключей с позицией
+      · из ${(d.keywords || []).length} найденных</p>
     <table>
       <tr><th>Ключ</th><th class="num">Поз.</th><th class="num">Объём</th>
         <th class="num">Сложн.</th><th class="num">Конк.</th></tr>
