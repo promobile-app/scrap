@@ -73,15 +73,21 @@ function renderKeywords(d) {
   targetEl.style.display = 'flex';
   targetEl.innerHTML = `${platformIcon(d.platform)}
     <span>${FLAGS[d.country] || (d.country || '').toUpperCase()}</span>
-    <b>${d.title}</b>`;
+    <b>${d.appTitle || d.appId}</b>`;
   const ranked = (d.keywords || []).filter((k) => k.rank != null);
+  const running = d.status === 'pending' || d.status === 'running';
+  const head = running
+    ? `<p class="muted" style="margin:8px 0"><span class="spinner"></span>идёт подбор:
+       ${d.processed} / ${d.total || '…'} — заполняется на ходу</p>`
+    : `<p class="muted" style="margin:8px 0">${ranked.length} ключей с позицией
+       · из ${(d.keywords || []).length} найденных</p>`;
   if (!ranked.length) {
-    resultEl.innerHTML = '<p class="muted">Приложение не ранжируется ни по одному из найденных ключей.</p>';
+    resultEl.innerHTML = head + (running ? '' :
+      '<p class="muted">Приложение не ранжируется ни по одному из найденных ключей.</p>');
     return;
   }
   resultEl.innerHTML = `
-    <p class="muted" style="margin:8px 0">${ranked.length} ключей с позицией
-      · из ${(d.keywords || []).length} найденных</p>
+    ${head}
     <div class="tw"><table>
       <tr><th>Ключ</th><th class="num">Поз.</th><th class="num">Объём</th>
         <th class="num">Сложн.</th><th class="num">Конк.</th></tr>
@@ -108,20 +114,28 @@ async function discoverKeywords() {
   goBtn.disabled = true;
   targetEl.style.display = 'none';
   resultEl.innerHTML = `<p class="muted" style="margin-top:12px">
-    <span class="spinner"></span>ищем ключи и метрики (до ~150) — несколько минут.
-    Не закрывайте окно.</p>`;
+    <span class="spinner"></span>запускаем подбор ключей…</p>`;
   try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 420000);
-    const res = await fetch(API + '/discover/by-url?url=' + encodeURIComponent(url),
-      { signal: ctrl.signal });
-    clearTimeout(timer);
-    const d = await res.json();
-    if (d.error) resultEl.innerHTML = '<p class="muted">Ошибка: ' + d.error + '</p>';
-    else renderKeywords(d);
+    let state = await fetch(API + '/discover/by-url?url=' + encodeURIComponent(url))
+      .then((r) => r.json());
+    if (state.error) {
+      resultEl.innerHTML = '<p class="muted">Ошибка: ' + state.error + '</p>';
+      return;
+    }
+    renderKeywords(state);
+    let guard = 0;
+    while ((state.status === 'pending' || state.status === 'running') && guard < 500) {
+      guard++;
+      await new Promise((r) => setTimeout(r, 4000));
+      state = await fetch(API + '/discover/job/' + state.jobId).then((r) => r.json());
+      if (state.error && !state.jobId) break;
+      renderKeywords(state);
+    }
+    if (state.status === 'error') {
+      resultEl.innerHTML = '<p class="muted">Ошибка подбора: ' + (state.error || '') + '</p>';
+    }
   } catch (e) {
-    const msg = e.name === 'AbortError' ? 'превышено время ожидания' : (e.message || e);
-    resultEl.innerHTML = '<p class="muted">Не удалось получить ключи: ' + msg + '</p>';
+    resultEl.innerHTML = '<p class="muted">Не удалось получить ключи: ' + (e.message || e) + '</p>';
   } finally {
     goBtn.disabled = false;
   }

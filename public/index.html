@@ -652,34 +652,24 @@
     }
 
     // Подбор ключей по вставленной ссылке на приложение.
-    async function discoverByLink() {
-      const url = document.getElementById('urlInput').value.trim();
+    function renderUrlJob(d) {
       const el = document.getElementById('urlResult');
-      if (!url) return;
-      el.innerHTML = '<p class="muted" style="margin-top:10px">ищем релевантные ключи и метрики (до ~150 ключей) — это может занять несколько минут…</p>';
-      let d;
-      try {
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 420000);
-        const res = await fetch(API + '/discover/by-url?url=' + encodeURIComponent(url),
-          { signal: ctrl.signal });
-        clearTimeout(timer);
-        d = await res.json();
-      } catch (e) {
-        el.innerHTML = '<p class="muted">Ошибка запроса: ' + (e.message || e) + '</p>';
-        return;
-      }
-      if (d.error) { el.innerHTML = '<p class="muted">Ошибка: ' + d.error + '</p>'; return; }
-      // Показываем только ключи, по которым приложение реально ранжируется.
       const ranked = (d.keywords || []).filter(k => k.rank != null);
+      const running = d.status === 'pending' || d.status === 'running';
+      const head = running
+        ? `<p class="muted" style="margin:10px 0 2px">${platformIcon(d.platform)}
+            ${FLAGS[d.country] || (d.country || '').toUpperCase()} · <b>${d.appTitle || d.appId}</b>
+            · идёт подбор: ${d.processed} / ${d.total || '…'} ключей…</p>`
+        : `<p class="muted" style="margin:10px 0 2px">${platformIcon(d.platform)}
+            ${FLAGS[d.country] || (d.country || '').toUpperCase()} · <b>${d.appTitle || d.appId}</b>
+            · ${ranked.length} ключей с позицией из ${(d.keywords || []).length} найденных</p>`;
       if (!ranked.length) {
-        el.innerHTML = '<p class="muted">Приложение не ранжируется ни по одному из найденных ключей.</p>';
+        el.innerHTML = head + (running ? ''
+          : '<p class="muted">Приложение не ранжируется ни по одному из найденных ключей.</p>');
         return;
       }
       el.innerHTML = `
-        <p class="muted" style="margin:10px 0 2px">${platformIcon(d.platform)}
-          ${FLAGS[d.country] || (d.country || '').toUpperCase()} ·
-          <b>${d.title}</b> · ${ranked.length} ключей с позицией из ${(d.keywords || []).length} найденных</p>
+        ${head}
         <table>
           <tr><th>Ключ</th><th>Позиция</th><th>Объём</th><th>Сложность</th><th>Конкуренты</th></tr>
           ${ranked.map(k => `<tr>
@@ -692,6 +682,32 @@
         </table>
         <p class="muted" style="margin-top:8px">Объём и сложность — приближённые оценки
         (насыщенность выдачи и сила конкурентов), не точные данные Apple Search Ads.</p>`;
+    }
+
+    async function discoverByLink() {
+      const url = document.getElementById('urlInput').value.trim();
+      const el = document.getElementById('urlResult');
+      if (!url) return;
+      el.innerHTML = '<p class="muted" style="margin-top:10px">запускаем подбор ключей…</p>';
+      try {
+        let state = await fetch(API + '/discover/by-url?url=' + encodeURIComponent(url))
+          .then(r => r.json());
+        if (state.error) { el.innerHTML = '<p class="muted">Ошибка: ' + state.error + '</p>'; return; }
+        renderUrlJob(state);
+        let guard = 0;
+        while ((state.status === 'pending' || state.status === 'running') && guard < 500) {
+          guard++;
+          await new Promise(r => setTimeout(r, 4000));
+          state = await fetch(API + '/discover/job/' + state.jobId).then(r => r.json());
+          if (state.error && !state.jobId) break;
+          renderUrlJob(state);
+        }
+        if (state.status === 'error') {
+          el.innerHTML = '<p class="muted">Ошибка подбора: ' + (state.error || '') + '</p>';
+        }
+      } catch (e) {
+        el.innerHTML = '<p class="muted">Ошибка запроса: ' + (e.message || e) + '</p>';
+      }
     }
 
     async function loadHistoryAll() {

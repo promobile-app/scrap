@@ -220,6 +220,12 @@
   function renderKeywords(d) {
     const flag = FLAGS[d.country] || (d.country || '').toUpperCase();
     const ranked = (d.keywords || []).filter((k) => k.rank != null);
+    const running = d.status === 'pending' || d.status === 'running';
+    const progress = running
+      ? `<p class="muted" style="margin:0 0 8px"><span class="spinner"></span>идёт подбор:
+         ${d.processed} / ${d.total || '…'} ключей — можно не ждать, заполняется на ходу</p>`
+      : `<p class="muted" style="margin:0 0 8px">${ranked.length} ключей с позицией
+         · из ${(d.keywords || []).length} найденных</p>`;
     const rows = ranked.map((k) => `<tr>
       <td>${k.term}</td>
       <td class="num ${k.rank <= 10 ? 'rank-top' : ''}">#${k.rank}</td>
@@ -229,15 +235,14 @@
     </tr>`).join('');
     resultEl.innerHTML = `
       <div class="target">${platformIcon(d.platform)}
-        <span>${flag}</span><b>${d.title}</b></div>
-      ${rows ? `<p class="muted" style="margin:0 0 8px">${ranked.length} ключей с позицией
-        · из ${(d.keywords || []).length} найденных</p>
-        <div class="tw"><table>
+        <span>${flag}</span><b>${d.appTitle || d.appId}</b></div>
+      ${progress}
+      ${rows ? `<div class="tw"><table>
         <tr><th>Ключ</th><th class="num">Поз.</th><th class="num">Объём</th>
           <th class="num">Сложн.</th><th class="num">Конк.</th></tr>${rows}</table></div>
         <p class="muted" style="margin-top:9px">Объём и сложность — приближённые оценки,
         не данные Apple Search Ads.</p>`
-        : '<p class="muted">Приложение не ранжируется ни по одному из найденных ключей.</p>'}`;
+        : (running ? '' : '<p class="muted">Приложение не ранжируется ни по одному из найденных ключей.</p>')}`;
   }
 
   async function discoverKeywords() {
@@ -249,19 +254,28 @@
     }
     goBtn.disabled = true;
     resultEl.innerHTML = `<p class="muted" style="margin-top:12px">
-      <span class="spinner"></span>ищем ключи и метрики (до ~150) — несколько минут.</p>`;
+      <span class="spinner"></span>запускаем подбор ключей…</p>`;
     try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 420000);
-      const res = await fetch(API + '/discover/by-url?url=' + encodeURIComponent(url),
-        { signal: ctrl.signal });
-      clearTimeout(timer);
-      const d = await res.json();
-      if (d.error) resultEl.innerHTML = '<p class="muted">Ошибка: ' + d.error + '</p>';
-      else renderKeywords(d);
+      let state = await fetch(API + '/discover/by-url?url=' + encodeURIComponent(url))
+        .then((r) => r.json());
+      if (state.error) {
+        resultEl.innerHTML = '<p class="muted">Ошибка: ' + state.error + '</p>';
+        return;
+      }
+      renderKeywords(state);
+      let guard = 0;
+      while ((state.status === 'pending' || state.status === 'running') && guard < 500) {
+        guard++;
+        await new Promise((r) => setTimeout(r, 4000));
+        state = await fetch(API + '/discover/job/' + state.jobId).then((r) => r.json());
+        if (state.error && !state.jobId) break;
+        renderKeywords(state);
+      }
+      if (state.status === 'error') {
+        resultEl.innerHTML = '<p class="muted">Ошибка подбора: ' + (state.error || '') + '</p>';
+      }
     } catch (e) {
-      const msg = e.name === 'AbortError' ? 'превышено время ожидания' : (e.message || e);
-      resultEl.innerHTML = '<p class="muted">Не удалось получить ключи: ' + msg + '</p>';
+      resultEl.innerHTML = '<p class="muted">Не удалось получить ключи: ' + (e.message || e) + '</p>';
     } finally {
       goBtn.disabled = false;
     }
