@@ -56,7 +56,16 @@ function storeFront(country: string, language?: string): string {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-let lastRequestAt = 0;
+
+// Слот-троттлинг: каждый вызов резервирует следующий временной слот.
+// Так параллельные вызовы не уходят к Apple пачкой (иначе — 429/403).
+let nextSlotAt = 0;
+async function throttleSlot(): Promise<void> {
+  const now = Date.now();
+  const slot = Math.max(now, nextSlotAt);
+  nextSlotAt = slot + config.scrapeDelayMs;
+  if (slot > now) await sleep(slot - now);
+}
 
 interface NativeSearchResponse {
   pageData?: {
@@ -73,13 +82,9 @@ export async function nativeSearchIds(
   country = config.defaultCountry,
   language?: string,
 ): Promise<string[]> {
-  // Троттлинг между запросами к Apple.
-  const wait = config.scrapeDelayMs - (Date.now() - lastRequestAt);
-  if (wait > 0) await sleep(wait);
-
   let lastErr: unknown;
   for (let attempt = 0; attempt < config.scrapeMaxRetries; attempt++) {
-    lastRequestAt = Date.now();
+    await throttleSlot();
     try {
       const url = new URL(SEARCH_URL);
       url.searchParams.set('clientApplication', 'Software');
@@ -111,7 +116,11 @@ export async function nativeSearchIds(
         .map((r) => r.id);
     } catch (err) {
       lastErr = err;
-      await sleep(500 * 2 ** attempt + Math.random() * 300);
+      // При 429/403 (ограничение Apple) — увеличенная пауза + сдвиг общего слота,
+      // чтобы притормозить и остальные параллельные запросы.
+      const throttled = /HTTP (429|403)/.test(String(err));
+      if (throttled) nextSlotAt = Math.max(nextSlotAt, Date.now() + 8000);
+      await sleep((throttled ? 4000 : 500) * 2 ** attempt + Math.random() * 400);
     }
   }
   throw new Error(`nativeSearchIds failed: ${String(lastErr)}`);
