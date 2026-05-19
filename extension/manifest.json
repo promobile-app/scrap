@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "RankRadar — ключи по приложению",
+  "version": "1.0.0",
+  "description": "Релевантные ключевые слова с метриками для открытой страницы App Store / Google Play.",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "RankRadar — подобрать ключи"
+  },
+  "permissions": ["activeTab"],
+  "host_permissions": [
+    "https://scrap-production-c0db.up.railway.app/*"
+  ]
+}
