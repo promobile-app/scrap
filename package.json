@@ -4,9 +4,9 @@
   "description": "ASO analytics service for Apple App Store (FoxData-like)",
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp src/db/schema.sql dist/db/schema.sql",
     "dev": "tsx watch src/api/server.ts",
-    "start": "node dist/api/server.js",
+    "start": "node dist/db/migrate.js && node dist/api/server.js",
     "scrape": "tsx src/cli.ts",
     "scheduler": "tsx src/jobs/scheduler.ts",
     "db:migrate": "tsx src/db/migrate.ts",
