@@ -84,7 +84,7 @@
     input, select, textarea {
       font-family: inherit; font-size: 14px; color: var(--ink);
       padding: 10px 12px; border: 1px solid var(--line);
-      border-radius: 10px; background: #fff; outline: none;
+      border-radius: 10px; background: var(--card); outline: none;
       transition: border-color .15s, box-shadow .15s;
     }
     input:focus, select:focus, textarea:focus {
@@ -140,6 +140,7 @@
     .app-row:hover { background: var(--hover); }
     .app-row img { width: 44px; height: 44px; border-radius: 11px; flex-shrink: 0; }
     .app-row.sel { background: #f0f1ff; border-color: rgba(91,94,244,.35); }
+    body[data-theme="dark"] .app-row.sel { background: rgba(91,94,244,.16); }
 
     /* --- Прочее --- */
     .bar {
@@ -150,6 +151,20 @@
     .rank-top { color: var(--green); font-weight: 700; }
     .rank-none { color: var(--muted); opacity: .6; }
     h2 { font-size: 16px; }
+
+    /* Интерактивный график динамики позиции */
+    .trend-chart { cursor: crosshair; display: block; }
+    .trend-chart .ch-dot { transition: r .1s ease; }
+    .chart-tooltip {
+      position: absolute; z-index: 60; pointer-events: none;
+      transform: translate(-50%, -100%);
+      background: rgba(24, 26, 38, .96); color: #fff;
+      padding: 6px 10px; border-radius: 8px; font-size: 12px;
+      white-space: nowrap; opacity: 0; transition: opacity .12s ease;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, .28);
+    }
+    .chart-tooltip b { font-size: 13px; }
+    .chart-tooltip span { display: block; color: #b9bdcc; font-size: 11px; margin-top: 2px; }
 
     /* Широкие таблицы прокручиваются по горизонтали */
     #appList, #metricsResult, #discoverResult, #bulkResult, #kwResult, #chart {
@@ -201,17 +216,12 @@
       </div>
       <div class="toolbar">
         <select id="platform" onchange="onPlatformChange()">
-          <option value="ios">🍎 App Store</option>
-          <option value="android">🤖 Google Play</option>
+          <option value="ios">App Store</option>
+          <option value="android">Google Play</option>
         </select>
         <input id="appQuery" placeholder="название приложения" size="22" />
         <select id="geo" onchange="loadLanguages()">
           <option value="us">🇺🇸 США</option>
-          <option value="gb">🇬🇧 Великобритания</option>
-          <option value="de">🇩🇪 Германия</option>
-          <option value="ua">🇺🇦 Украина</option>
-          <option value="ru">🇷🇺 Россия</option>
-          <option value="fr">🇫🇷 Франция</option>
         </select>
         <select id="lang" title="Язык витрины"></select>
         <button onclick="findApps()">Найти приложение</button>
@@ -434,6 +444,7 @@
     }
 
     // SVG-график динамики позиции по дням (меньше ранг = выше на графике).
+    let _chartSeq = 0;
     function chartSvg(history) {
       if (history.length < 2) {
         return `<p class="muted" style="margin-top:12px">📈 Сохранён ${history.length} замер.
@@ -447,27 +458,172 @@
       const n = history.length;
       const fx = i => pad + i * (W - 2 * pad) / Math.max(n - 1, 1);
       const fy = r => pad + (r - minR) / Math.max(maxR - minR, 1) * (H - 2 * pad);
-      const line = pts.map(p => `${fx(p.i).toFixed(1)},${fy(p.rank).toFixed(1)}`).join(' ');
-      const dots = pts.map(p =>
-        `<circle cx="${fx(p.i).toFixed(1)}" cy="${fy(p.rank).toFixed(1)}" r="4"
-          fill="var(--brand)"><title>#${p.rank} — ${new Date(p.capturedAt).toLocaleString()}</title></circle>`).join('');
+      const coords = pts.map(p => ({
+        x: +fx(p.i).toFixed(1), y: +fy(p.rank).toFixed(1),
+        rank: p.rank, capturedAt: p.capturedAt
+      }));
+      const line = coords.map(c => `${c.x},${c.y}`).join(' ');
+      const area = `${pad},${H - pad} ${line} ${W - pad},${H - pad}`;
+      const dots = coords.map((c, i) =>
+        `<circle class="ch-dot" data-i="${i}" cx="${c.x}" cy="${c.y}" r="3.5" fill="var(--brand)"/>`).join('');
       const fmt = d => new Date(d).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+      const id = 'ch' + (++_chartSeq);
+      const ptsAttr = JSON.stringify(coords).replace(/'/g, '&#39;');
       return `<div style="margin-top:14px">
         <div class="muted" style="margin-bottom:6px">Динамика позиции «${pts.length} замеров»</div>
-        <svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;background:var(--surface-2);
+        <svg id="${id}" class="trend-chart" viewBox="0 0 ${W} ${H}" data-pts='${ptsAttr}'
+          style="width:100%;max-width:${W}px;background:var(--surface-2);
           border:1px solid var(--line);border-radius:12px">
+          <defs><linearGradient id="${id}g" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="var(--brand)" stop-opacity="0.22"/>
+            <stop offset="100%" stop-color="var(--brand)" stop-opacity="0"/>
+          </linearGradient></defs>
           <text x="6" y="${pad + 4}" font-size="10" fill="var(--muted)">#${minR}</text>
           <text x="6" y="${H - pad + 4}" font-size="10" fill="var(--muted)">#${maxR}</text>
           <text x="${pad}" y="${H - 8}" font-size="10" fill="var(--muted)">${fmt(history[0].capturedAt)}</text>
           <text x="${W - pad}" y="${H - 8}" font-size="10" fill="var(--muted)"
             text-anchor="end">${fmt(history[n - 1].capturedAt)}</text>
+          <polygon points="${area}" fill="url(#${id}g)"/>
           <polyline points="${line}" fill="none" stroke="var(--brand)" stroke-width="2.5"
             stroke-linejoin="round" stroke-linecap="round"/>
+          <line class="ch-hair" x1="0" y1="${pad}" x2="0" y2="${H - pad}" stroke="var(--brand)"
+            stroke-width="1" stroke-dasharray="3 3" opacity="0"/>
           ${dots}
+          <circle class="ch-focus" r="6" fill="var(--brand)" stroke="#fff" stroke-width="2" opacity="0"/>
         </svg></div>`;
     }
 
-    const FLAGS = { us:'🇺🇸', gb:'🇬🇧', de:'🇩🇪', ua:'🇺🇦', ru:'🇷🇺', fr:'🇫🇷' };
+    // Единый интерактивный тултип для всех графиков динамики.
+    const _chTip = document.createElement('div');
+    _chTip.className = 'chart-tooltip';
+    document.body.appendChild(_chTip);
+    const CH_W = 560, CH_H = 190;
+    const MC = { geo: null };
+
+    function _chHide() {
+      _chTip.style.opacity = '0';
+      document.querySelectorAll('.trend-chart .ch-hair, .trend-chart .ch-focus, .multi-chart .mc-hair')
+        .forEach(el => el.setAttribute('opacity', '0'));
+    }
+
+    function _chPos(rect, x, y, w, h) {
+      _chTip.style.opacity = '1';
+      _chTip.style.left = (rect.left + window.scrollX + x / w * rect.width) + 'px';
+      _chTip.style.top = (rect.top + window.scrollY + y / h * rect.height - 12) + 'px';
+    }
+
+    function _trendTip(svg, e) {
+      let pts;
+      try { pts = JSON.parse(svg.dataset.pts); } catch { return; }
+      if (!pts || !pts.length) return;
+      const rect = svg.getBoundingClientRect();
+      const sx = (e.clientX - rect.left) / rect.width * CH_W;
+      let best = pts[0], bd = Infinity;
+      for (const p of pts) {
+        const d = Math.abs(p.x - sx);
+        if (d < bd) { bd = d; best = p; }
+      }
+      const hair = svg.querySelector('.ch-hair');
+      hair.setAttribute('x1', best.x); hair.setAttribute('x2', best.x);
+      hair.setAttribute('opacity', '0.5');
+      const focus = svg.querySelector('.ch-focus');
+      focus.setAttribute('cx', best.x); focus.setAttribute('cy', best.y);
+      focus.setAttribute('opacity', '1');
+      _chTip.innerHTML = `<b>#${best.rank}</b>
+        <span>${new Date(best.capturedAt).toLocaleString('ru-RU')}</span>`;
+      _chPos(rect, best.x, best.y, CH_W, CH_H);
+    }
+
+    function _multiTip(svg, e) {
+      const g = MC.geo;
+      if (!g) { _chHide(); return; }
+      const rect = svg.getBoundingClientRect();
+      const sx = (e.clientX - rect.left) / rect.width * g.W;
+      let hdr = null, hd = Infinity;
+      const rows = g.series.map(s => {
+        let best = s.pts[0], bd = Infinity;
+        for (const p of s.pts) {
+          const d = Math.abs(p.x - sx);
+          if (d < bd) { bd = d; best = p; }
+          if (d < hd) { hd = d; hdr = p; }
+        }
+        return { color: s.color, label: s.label, p: best };
+      });
+      const hx = Math.max(g.padL, Math.min(g.W - g.padR, sx));
+      const hair = svg.querySelector('.mc-hair');
+      hair.setAttribute('x1', hx); hair.setAttribute('x2', hx);
+      hair.setAttribute('opacity', '0.5');
+      rows.sort((a, b) => a.p.rank - b.p.rank);
+      _chTip.innerHTML =
+        `<span style="display:block;color:#b9bdcc;font-size:11px;margin-bottom:4px">
+          ${hdr ? new Date(hdr.capturedAt).toLocaleString('ru-RU') : ''}</span>` +
+        rows.map(r => `<div style="display:flex;align-items:center;gap:6px;margin-top:2px">
+          <span style="width:8px;height:8px;border-radius:50%;background:${r.color};flex:none"></span>
+          <span>${r.label}</span>
+          <b style="margin-left:auto;padding-left:10px">#${r.p.rank}</b></div>`).join('');
+      _chPos(rect, hx, g.padT, g.W, g.H);
+    }
+
+    document.addEventListener('mousemove', e => {
+      const t = e.target;
+      const trend = t.closest && t.closest('.trend-chart');
+      if (trend) { _trendTip(trend, e); return; }
+      const multi = t.closest && t.closest('.multi-chart');
+      if (multi) { _multiTip(multi, e); return; }
+      _chHide();
+    });
+
+    // Полный список гео для App Store / Google Play.
+    const COUNTRIES = [
+      ['us', 'США', '🇺🇸'], ['au', 'Австралия', '🇦🇺'], ['at', 'Австрия', '🇦🇹'],
+      ['az', 'Азербайджан', '🇦🇿'], ['ar', 'Аргентина', '🇦🇷'], ['am', 'Армения', '🇦🇲'],
+      ['by', 'Беларусь', '🇧🇾'], ['be', 'Бельгия', '🇧🇪'], ['bg', 'Болгария', '🇧🇬'],
+      ['br', 'Бразилия', '🇧🇷'], ['gb', 'Великобритания', '🇬🇧'], ['hu', 'Венгрия', '🇭🇺'],
+      ['vn', 'Вьетнам', '🇻🇳'], ['de', 'Германия', '🇩🇪'], ['hk', 'Гонконг', '🇭🇰'],
+      ['gr', 'Греция', '🇬🇷'], ['ge', 'Грузия', '🇬🇪'], ['dk', 'Дания', '🇩🇰'],
+      ['eg', 'Египет', '🇪🇬'], ['il', 'Израиль', '🇮🇱'], ['in', 'Индия', '🇮🇳'],
+      ['id', 'Индонезия', '🇮🇩'], ['ie', 'Ирландия', '🇮🇪'], ['es', 'Испания', '🇪🇸'],
+      ['it', 'Италия', '🇮🇹'], ['kz', 'Казахстан', '🇰🇿'], ['ca', 'Канада', '🇨🇦'],
+      ['qa', 'Катар', '🇶🇦'], ['cn', 'Китай', '🇨🇳'], ['co', 'Колумбия', '🇨🇴'],
+      ['kr', 'Корея', '🇰🇷'], ['my', 'Малайзия', '🇲🇾'], ['mx', 'Мексика', '🇲🇽'],
+      ['nl', 'Нидерланды', '🇳🇱'], ['nz', 'Новая Зеландия', '🇳🇿'], ['no', 'Норвегия', '🇳🇴'],
+      ['ae', 'ОАЭ', '🇦🇪'], ['pl', 'Польша', '🇵🇱'], ['pt', 'Португалия', '🇵🇹'],
+      ['ru', 'Россия', '🇷🇺'], ['ro', 'Румыния', '🇷🇴'], ['sa', 'Саудовская Аравия', '🇸🇦'],
+      ['rs', 'Сербия', '🇷🇸'], ['sg', 'Сингапур', '🇸🇬'], ['sk', 'Словакия', '🇸🇰'],
+      ['th', 'Таиланд', '🇹🇭'], ['tw', 'Тайвань', '🇹🇼'], ['tr', 'Турция', '🇹🇷'],
+      ['ua', 'Украина', '🇺🇦'], ['ph', 'Филиппины', '🇵🇭'], ['fi', 'Финляндия', '🇫🇮'],
+      ['fr', 'Франция', '🇫🇷'], ['hr', 'Хорватия', '🇭🇷'], ['cz', 'Чехия', '🇨🇿'],
+      ['cl', 'Чили', '🇨🇱'], ['ch', 'Швейцария', '🇨🇭'], ['se', 'Швеция', '🇸🇪'],
+      ['ee', 'Эстония', '🇪🇪'], ['za', 'ЮАР', '🇿🇦'], ['jp', 'Япония', '🇯🇵'],
+    ];
+    const FLAGS = Object.fromEntries(COUNTRIES.map(c => [c[0], c[2]]));
+
+    function populateGeo() {
+      const sel = document.getElementById('geo');
+      sel.innerHTML = COUNTRIES
+        .map(c => `<option value="${c[0]}">${c[2]} ${c[1]}</option>`).join('');
+      sel.value = 'us';
+    }
+    populateGeo();
+
+    // Оригинальные иконки магазинов.
+    function platformIcon(platform) {
+      if (platform === 'android') {
+        return `<svg viewBox="0 0 512 512" width="13" height="13" style="vertical-align:-2px">
+          <path fill="#34A853" d="M104.6 13c-2.8 1.4-5.5 3.3-7.9 5.5-9.3 8.7-15 22.3-15 39.5v396c0 17.2 5.7 30.8 15 39.5 2.4 2.2 5.1 4.1 7.9 5.5l220.7-243z"/>
+          <path fill="#EA4335" d="M325.3 234.3 104.6 13l280.8 161.2z"/>
+          <path fill="#FBBC04" d="M104.6 499 325.3 277.7l60.1 60.1z"/>
+          <path fill="#4285F4" d="M447.1 256c0 19.6-10.5 36.9-26.6 46.1l-35.2 20.4-60.1-66.5 60.1-66.5 35.4 20.5c16 9.1 26.4 26.3 26.4 46z"/>
+        </svg>`;
+      }
+      return `<svg viewBox="0 0 24 24" width="13" height="13" style="vertical-align:-2px">
+        <rect width="24" height="24" rx="5.4" fill="#1f9bf5"/>
+        <g stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <path d="M7.4 17 12 7.4 16.6 17"/>
+          <path d="M9.2 14.1h5.6"/>
+        </g>
+      </svg>`;
+    }
 
     async function loadHistoryAll() {
       const el = document.getElementById('historyList');
@@ -485,31 +641,124 @@
           Откройте дашборд напрямую: <a href="http://localhost:3000" style="color:var(--brand)">http://localhost:3000</a></p>`;
         return;
       }
-      const items = d.items || [];
+      const items = (d.items || []).filter(it => (it.history || []).some(h => h.rank != null));
       if (!items.length) {
         el.innerHTML = '<p class="muted">Пока нет сохранённых замеров. Проверьте связку «приложение + ключ» через «Метрики по ключу» — она попадёт сюда и в автозамер.</p>';
         return;
       }
-      try {
-        el.innerHTML = items.map(it => {
-          const hist = it.history || [];
-          const last = hist[hist.length - 1] || {};
-          const r = last.rank;
-          return `<div style="padding:14px 0;border-top:1px solid var(--line)">
-            <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
-              <b>${it.appTitle || it.appId}</b>
-              <span class="muted">${it.platform === 'android' ? '🤖' : '🍎'}
-                ${FLAGS[it.country] || (it.country || '').toUpperCase()} · ключ «${it.term}»</span>
-              <span style="margin-left:auto" class="${r ? (r <= 10 ? 'rank-top' : '') : 'rank-none'}">
-                <b style="font-size:18px">${r ? '#' + r : '—'}</b></span>
-            </div>
-            ${chartSvg(hist)}
-          </div>`;
-        }).join('');
-      } catch (e) {
-        el.innerHTML = '<p class="muted">Ошибка отрисовки: ' + (e.message || e) + '</p>';
-      }
+      HIST.series = items.map((it, i) => ({
+        color: MC_PALETTE[i % MC_PALETTE.length],
+        platform: it.platform,
+        country: it.country,
+        appTitle: it.appTitle || it.appId,
+        term: it.term,
+        label: `${platformIcon(it.platform)} ${FLAGS[it.country] || (it.country || '').toUpperCase()} «${it.term}»`,
+        history: (it.history || []).filter(h => h.rank != null)
+          .sort((a, b) => new Date(a.capturedAt) - new Date(b.capturedAt)),
+        enabled: false,
+      }));
+      el.innerHTML = `
+        <div id="historyChips" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px"></div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+          <span class="muted">Шкала позиции:</span>
+          <button id="scaleBtn" class="theme-btn" style="padding:6px 12px;font-size:13px"
+            onclick="toggleScale()">линейная</button>
+        </div>
+        <div id="multiChart"></div>`;
+      renderChips();
+      renderMultiChart();
     }
+
+    const MC_PALETTE = ['#5b5ef4', '#22c55e', '#f59e0b', '#ef4444', '#06b6d4', '#a855f7', '#ec4899', '#84cc16'];
+    const HIST = { series: [], log: false };
+
+    function renderChips() {
+      const el = document.getElementById('historyChips');
+      if (!el) return;
+      el.innerHTML = HIST.series.map((s, i) => {
+        const last = s.history[s.history.length - 1] || {};
+        return `<button onclick="toggleSeries(${i})" title="${s.appTitle}"
+          style="display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;
+          cursor:pointer;font-size:12px;font-weight:600;line-height:1;box-shadow:none;
+          border:1px solid ${s.enabled ? s.color : 'var(--line)'};
+          background:${s.enabled ? s.color + '22' : 'var(--surface-2)'};
+          color:${s.enabled ? 'var(--ink)' : 'var(--muted)'}">
+          <span style="width:10px;height:10px;border-radius:50%;flex:none;
+            background:${s.enabled ? s.color : 'var(--muted)'}"></span>
+          ${s.label} · ${s.appTitle} · #${last.rank ?? '—'}</button>`;
+      }).join('');
+    }
+
+    function toggleSeries(i) {
+      HIST.series[i].enabled = !HIST.series[i].enabled;
+      renderChips();
+      renderMultiChart();
+    }
+
+    function toggleScale() {
+      HIST.log = !HIST.log;
+      const b = document.getElementById('scaleBtn');
+      if (b) b.textContent = HIST.log ? 'логарифмическая' : 'линейная';
+      renderMultiChart();
+    }
+
+    // Общий график: несколько серий «прила + ключ + гео» на одной шкале времени.
+    function renderMultiChart() {
+      const host = document.getElementById('multiChart');
+      if (!host) return;
+      const active = HIST.series.filter(s => s.enabled && s.history.length);
+      if (!active.length) {
+        host.innerHTML = '<p class="muted">Выберите связки выше — линии появятся на общем графике.</p>';
+        MC.geo = null;
+        return;
+      }
+      const W = 720, H = 290, padL = 46, padR = 18, padT = 18, padB = 36;
+      let tMin = Infinity, tMax = -Infinity, rMin = Infinity, rMax = -Infinity;
+      for (const s of active) for (const h of s.history) {
+        const t = new Date(h.capturedAt).getTime();
+        if (t < tMin) tMin = t;
+        if (t > tMax) tMax = t;
+        if (h.rank < rMin) rMin = h.rank;
+        if (h.rank > rMax) rMax = h.rank;
+      }
+      const spanT = Math.max(tMax - tMin, 1);
+      const fx = t => padL + (t - tMin) / spanT * (W - padL - padR);
+      const log = HIST.log;
+      const yv = r => log ? Math.log(r) : r;
+      const yMin = yv(rMin), spanY = Math.max(yv(rMax) - yMin, 1e-9);
+      const flat = rMax === rMin;
+      const plotH = H - padT - padB;
+      const fy = r => flat ? padT + plotH / 2 : padT + (yv(r) - yMin) / spanY * plotH;
+      const fmtD = t => new Date(t).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+
+      MC.geo = { W, H, padL, padR, padT, padB, series: [] };
+      let body = '';
+      for (const s of active) {
+        const pts = s.history.map(h => ({
+          x: +fx(new Date(h.capturedAt).getTime()).toFixed(1),
+          y: +fy(h.rank).toFixed(1),
+          rank: h.rank, capturedAt: h.capturedAt,
+        }));
+        MC.geo.series.push({ color: s.color, label: s.label, pts });
+        const poly = pts.map(p => `${p.x},${p.y}`).join(' ');
+        const dots = pts.map(p => `<circle cx="${p.x}" cy="${p.y}" r="3.5" fill="${s.color}"/>`).join('');
+        body += `<polyline points="${poly}" fill="none" stroke="${s.color}" stroke-width="2.5"
+          stroke-linejoin="round" stroke-linecap="round"/>${dots}`;
+      }
+      host.innerHTML = `<svg class="multi-chart" viewBox="0 0 ${W} ${H}"
+        style="width:100%;background:var(--surface-2);border:1px solid var(--line);border-radius:12px">
+        <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${H - padB}" stroke="var(--line)"/>
+        <line x1="${padL}" y1="${H - padB}" x2="${W - padR}" y2="${H - padB}" stroke="var(--line)"/>
+        <text x="${padL - 6}" y="${padT + 4}" font-size="10" fill="var(--muted)" text-anchor="end">#${rMin}</text>
+        <text x="${padL - 6}" y="${H - padB + 4}" font-size="10" fill="var(--muted)" text-anchor="end">#${rMax}</text>
+        <text x="${padL}" y="${H - 12}" font-size="10" fill="var(--muted)">${fmtD(tMin)}</text>
+        <text x="${W - padR}" y="${H - 12}" font-size="10" fill="var(--muted)" text-anchor="end">${fmtD(tMax)}</text>
+        ${body}
+        <line class="mc-hair" x1="0" y1="${padT}" x2="0" y2="${H - padB}" stroke="var(--muted)"
+          stroke-width="1" stroke-dasharray="3 3" opacity="0"/>
+      </svg>`;
+    }
+
     loadHistoryAll();
 
     async function checkKeyword() {
