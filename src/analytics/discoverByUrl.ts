@@ -1,6 +1,6 @@
 import { appLookup, lookupApps, suggest } from '../scrapers/appstore.js';
 import { nativeSearchIds } from '../scrapers/native.js';
-import { gpAppLookup, gpSearch, gpSuggest } from '../scrapers/googleplay.js';
+import { gpAppLookup, gpSearch, gpSuggest, type GpAppInfo } from '../scrapers/googleplay.js';
 import { parseStoreUrl } from '../scrapers/storeUrl.js';
 
 export interface UrlKeyword {
@@ -18,6 +18,9 @@ export interface UrlDiscoveryResult {
   country: string;
   keywords: UrlKeyword[];
 }
+
+// Сколько ключей-кандидатов набираем и считаем максимум.
+const MAX_KEYWORDS = 150;
 
 const STOP_WORDS = new Set([
   'the', 'and', 'for', 'app', 'with', 'your', 'free', 'pro', 'plus',
@@ -68,15 +71,20 @@ async function mapLimit<T, R>(
   return out;
 }
 
-/** Генерация кандидатов ключевых слов из названия и жанра приложения. */
+/**
+ * Генерация ключей-кандидатов: сиды из названия и жанра, затем
+ * послойное расширение через autocomplete магазина (BFS), пока не
+ * наберём нужное количество.
+ */
 async function buildCandidates(
   title: string,
   genre: string,
   country: string,
   platform: 'ios' | 'android',
-  maxCandidates = 24,
+  maxCandidates = MAX_KEYWORDS,
 ): Promise<string[]> {
-  const seeds = [...new Set([...words(title), ...words(genre)])].slice(0, 6);
+  const suggestFn = platform === 'android' ? gpSuggest : suggest;
+  const seeds = [...new Set([...words(title), ...words(genre)])].slice(0, 8);
   const candidates = new Set<string>([...seeds, genre.toLowerCase()]);
 
   const titleWords = words(title);
@@ -84,10 +92,26 @@ async function buildCandidates(
     candidates.add(`${titleWords[i]} ${titleWords[i + 1]}`);
   }
 
-  const suggestFn = platform === 'android' ? gpSuggest : suggest;
-  for (const seed of seeds) {
-    const hints = await suggestFn(seed, country).catch(() => [] as string[]);
-    hints.slice(0, 5).forEach((h) => candidates.add(h.toLowerCase()));
+  // Послойное расширение через autocomplete.
+  let frontier = [...seeds];
+  let depth = 0;
+  while (candidates.size < maxCandidates && frontier.length > 0 && depth < 3) {
+    const hintLists = await mapLimit(frontier, 5, (term) =>
+      suggestFn(term, country).catch(() => [] as string[]),
+    );
+    const next: string[] = [];
+    for (const hints of hintLists) {
+      for (const h of hints) {
+        const hl = h.toLowerCase().trim();
+        if (hl.length >= 3 && !candidates.has(hl)) {
+          candidates.add(hl);
+          next.push(hl);
+        }
+      }
+    }
+    // Ограничиваем ветвление, чтобы не разрастаться бесконтрольно.
+    frontier = next.slice(0, 24);
+    depth++;
   }
 
   return [...candidates].filter((c) => c.length >= 3).slice(0, maxCandidates);
@@ -104,7 +128,7 @@ function sortKeywords(keywords: UrlKeyword[]): UrlKeyword[] {
 
 /**
  * По ссылке на приложение в App Store / Google Play возвращает релевантные
- * ключевые слова с позицией, объёмом и сложностью.
+ * ключевые слова с позицией, объёмом и сложностью (до ~150 ключей).
  */
 export async function discoverByUrl(rawUrl: string): Promise<UrlDiscoveryResult> {
   const { platform, appId, country } = parseStoreUrl(rawUrl);
@@ -114,14 +138,24 @@ export async function discoverByUrl(rawUrl: string): Promise<UrlDiscoveryResult>
     const app = await gpAppLookup(appId, country);
     if (!app) throw new Error('Приложение не найдено в Google Play для этого гео');
 
-    const candidates = await buildCandidates(app.title, app.genre, country, 'android', 16);
+    const candidates = await buildCandidates(app.title, app.genre, country, 'android');
+
+    // Кэш деталей приложений: топ-конкуренты повторяются между ключами.
+    const cache = new Map<string, GpAppInfo | null>();
+    const cachedLookup = async (id: string): Promise<GpAppInfo | null> => {
+      if (cache.has(id)) return cache.get(id) ?? null;
+      const info = await gpAppLookup(id, country);
+      cache.set(id, info);
+      return info;
+    };
+
     const raw = await mapLimit(candidates, 3, async (term): Promise<UrlKeyword | null> => {
       try {
         const results = await gpSearch(term, country, 250);
         const idx = results.findIndex((a) => a.appId === appId);
-        // Поиск Google Play не отдаёт число отзывов — подтягиваем детали топ-5.
+        // Поиск Google Play не отдаёт число отзывов — подтягиваем детали топ-4.
         const top = await Promise.all(
-          results.slice(0, 5).map((a) => gpAppLookup(a.appId, country)),
+          results.slice(0, 4).map((a) => cachedLookup(a.appId)),
         );
         return {
           term,
@@ -143,7 +177,7 @@ export async function discoverByUrl(rawUrl: string): Promise<UrlDiscoveryResult>
   if (!app) throw new Error('Приложение не найдено в App Store для этого гео');
 
   const candidates = await buildCandidates(app.title, app.primaryGenre, country, 'ios');
-  const raw = await mapLimit(candidates, 4, async (term): Promise<UrlKeyword | null> => {
+  const raw = await mapLimit(candidates, 5, async (term): Promise<UrlKeyword | null> => {
     try {
       const ids = await nativeSearchIds(term, country);
       const idx = ids.indexOf(appId);
