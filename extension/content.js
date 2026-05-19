@@ -178,10 +178,10 @@
     }
     goBtn.disabled = true;
     resultEl.innerHTML = `<p class="muted" style="margin-top:12px">
-      <span class="spinner"></span>ищем релевантные ключи и метрики… до минуты.</p>`;
+      <span class="spinner"></span>ищем ключи и метрики (до ~150) — несколько минут.</p>`;
     try {
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 150000);
+      const timer = setTimeout(() => ctrl.abort(), 420000);
       const res = await fetch(API + '/discover/by-url?url=' + encodeURIComponent(url),
         { signal: ctrl.signal });
       clearTimeout(timer);

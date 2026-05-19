@@ -656,11 +656,11 @@
       const url = document.getElementById('urlInput').value.trim();
       const el = document.getElementById('urlResult');
       if (!url) return;
-      el.innerHTML = '<p class="muted" style="margin-top:10px">ищем релевантные ключи и метрики… это может занять до минуты</p>';
+      el.innerHTML = '<p class="muted" style="margin-top:10px">ищем релевантные ключи и метрики (до ~150 ключей) — это может занять несколько минут…</p>';
       let d;
       try {
         const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 120000);
+        const timer = setTimeout(() => ctrl.abort(), 420000);
         const res = await fetch(API + '/discover/by-url?url=' + encodeURIComponent(url),
           { signal: ctrl.signal });
         clearTimeout(timer);
