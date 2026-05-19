@@ -82,7 +82,7 @@ function renderKeywords(d) {
   resultEl.innerHTML = `
     <p class="muted" style="margin:8px 0">${ranked.length} ключей с позицией
       · из ${(d.keywords || []).length} найденных</p>
-    <table>
+    <div class="tw"><table>
       <tr><th>Ключ</th><th class="num">Поз.</th><th class="num">Объём</th>
         <th class="num">Сложн.</th><th class="num">Конк.</th></tr>
       ${ranked.map((k) => `<tr>
@@ -92,7 +92,7 @@ function renderKeywords(d) {
         <td class="num">${k.difficulty}</td>
         <td class="num">${k.totalResults}</td>
       </tr>`).join('')}
-    </table>
+    </table></div>
     <p class="muted" style="margin-top:9px">Объём и сложность — приближённые оценки,
     не данные Apple Search Ads.</p>`;
 }
@@ -149,7 +149,8 @@ function renderMetric(d) {
       <div class="mtile"><div class="mv">${d.totalResults ?? '—'}</div>
         <div class="ml">Конкурентов</div></div>
     </div>
-    ${top ? `<table><tr><th class="num">#</th><th>Топ выдачи по «${d.term}»</th></tr>${top}</table>` : ''}`;
+    ${top ? `<div class="tw"><table>
+      <tr><th class="num">#</th><th>Топ выдачи по «${d.term}»</th></tr>${top}</table></div>` : ''}`;
 }
 
 async function checkKeyword() {
