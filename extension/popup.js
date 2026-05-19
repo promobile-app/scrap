@@ -2,11 +2,14 @@
 const API = 'https://scrap-production-c0db.up.railway.app';
 
 const goBtn = document.getElementById('go');
+const recalcBtn = document.getElementById('recalcBtn');
 const resultEl = document.getElementById('result');
 const targetEl = document.getElementById('target');
 const kwInput = document.getElementById('kwInput');
 const checkBtn = document.getElementById('checkBtn');
 const metricResultEl = document.getElementById('metricResult');
+const histResult = document.getElementById('histResult');
+const histRefresh = document.getElementById('histRefresh');
 
 const FLAGS = {
   us: '🇺🇸', gb: '🇬🇧', de: '🇩🇪', ua: '🇺🇦', ru: '🇷🇺', fr: '🇫🇷', pl: '🇵🇱',
@@ -59,14 +62,63 @@ async function activeTabUrl() {
 }
 
 // --- Вкладки ---
+let histLoaded = false;
 document.querySelectorAll('.tab').forEach((tab) => {
   tab.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
     document.querySelectorAll('.pane').forEach((p) => p.classList.remove('active'));
     tab.classList.add('active');
     document.getElementById('pane-' + tab.dataset.tab).classList.add('active');
+    if (tab.dataset.tab === 'hist' && !histLoaded) {
+      histLoaded = true;
+      loadHistory();
+    }
   });
 });
+
+// Мини-спарклайн динамики позиции.
+function miniSpark(history) {
+  const pts = (history || []).filter((h) => h.rank != null);
+  if (pts.length < 2) return '<span style="width:64px;flex:none"></span>';
+  const W = 64, H = 22;
+  const ranks = pts.map((p) => p.rank);
+  const mn = Math.min(...ranks), mx = Math.max(...ranks);
+  const fx = (i) => (i * W) / (pts.length - 1);
+  const fy = (r) => (mx === mn ? H / 2 : 3 + ((r - mn) / (mx - mn)) * (H - 6));
+  const line = pts.map((p, i) => `${fx(i).toFixed(1)},${fy(p.rank).toFixed(1)}`).join(' ');
+  return `<svg width="${W}" height="${H}" style="flex:none">
+    <polyline points="${line}" fill="none" stroke="#5b8bff" stroke-width="1.6"
+      stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+
+// --- Вкладка «История» (общая с дашбордом — одна БД) ---
+async function loadHistory() {
+  histResult.innerHTML = '<p class="muted" style="margin-top:12px"><span class="spinner"></span>загрузка…</p>';
+  try {
+    const d = await fetch(API + '/history/all').then((r) => r.json());
+    const items = d.items || [];
+    if (!items.length) {
+      histResult.innerHTML = '<p class="muted" style="margin-top:12px">Пока нет сохранённых замеров.</p>';
+      return;
+    }
+    histResult.innerHTML = items.map((it) => {
+      const hist = it.history || [];
+      const last = hist[hist.length - 1] || {};
+      const flag = FLAGS[it.country] || (it.country || '').toUpperCase();
+      return `<div class="hrow">
+        <div class="hmain">
+          <div class="ht">${platformIcon(it.platform)} ${flag} «${it.term}»</div>
+          <div class="hs">${it.appTitle || it.appId}</div>
+        </div>
+        ${miniSpark(hist)}
+        <div class="hr ${last.rank ? (last.rank <= 10 ? 'rank-top' : '') : ''}">
+          ${last.rank ? '#' + last.rank : '—'}</div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    histResult.innerHTML = '<p class="muted">Не удалось загрузить историю: ' + (e.message || e) + '</p>';
+  }
+}
 
 // Скачивание CSV: тянем файл и сохраняем через blob-ссылку.
 async function exportCsv(url, filename) {
@@ -127,7 +179,7 @@ function renderKeywords(d) {
     не данные Apple Search Ads.</p>`;
 }
 
-async function discoverKeywords() {
+async function discoverKeywords(force) {
   const url = await activeTabUrl();
   if (!parsePage(url)) {
     resultEl.innerHTML = `<p class="muted" style="margin-top:12px">
@@ -136,12 +188,13 @@ async function discoverKeywords() {
     return;
   }
   goBtn.disabled = true;
+  recalcBtn.disabled = true;
   targetEl.style.display = 'none';
   resultEl.innerHTML = `<p class="muted" style="margin-top:12px">
     <span class="spinner"></span>запускаем подбор ключей…</p>`;
   try {
-    let state = await fetch(API + '/discover/by-url?url=' + encodeURIComponent(url))
-      .then((r) => r.json());
+    let state = await fetch(API + '/discover/by-url?url=' + encodeURIComponent(url)
+      + (force ? '&fresh=1' : '')).then((r) => r.json());
     if (state.error) {
       resultEl.innerHTML = '<p class="muted">Ошибка: ' + state.error + '</p>';
       return;
@@ -162,6 +215,7 @@ async function discoverKeywords() {
     resultEl.innerHTML = '<p class="muted">Не удалось получить ключи: ' + (e.message || e) + '</p>';
   } finally {
     goBtn.disabled = false;
+    recalcBtn.disabled = false;
   }
 }
 
@@ -222,9 +276,11 @@ async function checkKeyword() {
   }
 }
 
-goBtn.addEventListener('click', discoverKeywords);
+goBtn.addEventListener('click', () => discoverKeywords(false));
+recalcBtn.addEventListener('click', () => discoverKeywords(true));
 checkBtn.addEventListener('click', checkKeyword);
 kwInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') checkKeyword(); });
+histRefresh.addEventListener('click', () => { histLoaded = true; loadHistory(); });
 
 // Подсказываем, если вкладка — не страница магазина.
 activeTabUrl().then((url) => {

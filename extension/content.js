@@ -123,6 +123,23 @@
       }
       .go:hover { background: #345fdb; }
       .go:disabled { opacity: .55; cursor: not-allowed; }
+      .secbtn {
+        padding: 12px 14px; border-radius: 13px; background: #202024;
+        color: #f1f1f3; border: 1px solid #2c2c31;
+        font-weight: 700; font-size: 13px; cursor: pointer;
+      }
+      .secbtn:hover { background: #2a2a30; }
+      .secbtn:disabled { opacity: .55; cursor: not-allowed; }
+      .hrow {
+        display: flex; align-items: center; gap: 9px;
+        background: #202024; border: 1px solid #2c2c31;
+        border-radius: 13px; padding: 9px 12px; margin-bottom: 7px;
+      }
+      .hrow .hmain { flex: 1; min-width: 0; }
+      .hrow .ht { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .hrow .hs { font-size: 11px; color: #87878f; margin-top: 2px;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .hrow .hr { font-size: 15px; font-weight: 800; }
       .muted { color: #87878f; font-size: 12px; }
       .target {
         display: flex; align-items: center; gap: 8px; margin: 13px 0;
@@ -182,12 +199,16 @@
         <button class="x" id="close">✕</button>
       </div>
       <div class="tabs">
-        <button class="tab active" data-tab="kw">Ключи приложения</button>
-        <button class="tab" data-tab="metric">Метрики по ключу</button>
+        <button class="tab active" data-tab="kw">Ключи</button>
+        <button class="tab" data-tab="metric">Метрики</button>
+        <button class="tab" data-tab="hist">История</button>
       </div>
       <div class="body">
         <div class="pane active" id="pane-kw">
-          <button class="go" id="go">Подобрать ключи</button>
+          <div style="display:flex;gap:8px">
+            <button class="go" id="go" style="flex:1">Подобрать ключи</button>
+            <button class="secbtn" id="recalcBtn" title="Подобрать заново, игнорируя кэш">↻</button>
+          </div>
           <div id="result"></div>
         </div>
         <div class="pane" id="pane-metric">
@@ -195,26 +216,82 @@
           <button class="go" id="checkBtn">Проверить позицию</button>
           <div id="metricResult"></div>
         </div>
+        <div class="pane" id="pane-hist">
+          <button class="secbtn" id="histRefresh" style="width:100%">↻ Обновить историю</button>
+          <div id="histResult"></div>
+        </div>
       </div>
     </div>`;
 
   const fab = root.getElementById('fab');
   const panel = root.getElementById('panel');
   const goBtn = root.getElementById('go');
+  const recalcBtn = root.getElementById('recalcBtn');
   const resultEl = root.getElementById('result');
   const kwInput = root.getElementById('kwInput');
   const checkBtn = root.getElementById('checkBtn');
   const metricResultEl = root.getElementById('metricResult');
+  const histResult = root.getElementById('histResult');
+  const histRefresh = root.getElementById('histRefresh');
 
   // --- Вкладки ---
+  let histLoaded = false;
   root.querySelectorAll('.tab').forEach((tab) => {
     tab.addEventListener('click', () => {
       root.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
       root.querySelectorAll('.pane').forEach((p) => p.classList.remove('active'));
       tab.classList.add('active');
       root.getElementById('pane-' + tab.dataset.tab).classList.add('active');
+      if (tab.dataset.tab === 'hist' && !histLoaded) {
+        histLoaded = true;
+        loadHistory();
+      }
     });
   });
+
+  // Мини-спарклайн динамики позиции.
+  function miniSpark(history) {
+    const pts = (history || []).filter((h) => h.rank != null);
+    if (pts.length < 2) return '<span style="width:64px;flex:none"></span>';
+    const W = 64, H = 22;
+    const ranks = pts.map((p) => p.rank);
+    const mn = Math.min(...ranks), mx = Math.max(...ranks);
+    const fx = (i) => (i * W) / (pts.length - 1);
+    const fy = (r) => (mx === mn ? H / 2 : 3 + ((r - mn) / (mx - mn)) * (H - 6));
+    const line = pts.map((p, i) => `${fx(i).toFixed(1)},${fy(p.rank).toFixed(1)}`).join(' ');
+    return `<svg width="${W}" height="${H}" style="flex:none">
+      <polyline points="${line}" fill="none" stroke="#5b8bff" stroke-width="1.6"
+        stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+  }
+
+  // --- Вкладка «История» (общая с дашбордом — одна БД) ---
+  async function loadHistory() {
+    histResult.innerHTML = '<p class="muted" style="margin-top:12px"><span class="spinner"></span>загрузка…</p>';
+    try {
+      const d = await fetch(API + '/history/all').then((r) => r.json());
+      const items = d.items || [];
+      if (!items.length) {
+        histResult.innerHTML = '<p class="muted" style="margin-top:12px">Пока нет сохранённых замеров.</p>';
+        return;
+      }
+      histResult.innerHTML = items.map((it) => {
+        const hist = it.history || [];
+        const last = hist[hist.length - 1] || {};
+        const flag = FLAGS[it.country] || (it.country || '').toUpperCase();
+        return `<div class="hrow">
+          <div class="hmain">
+            <div class="ht">${platformIcon(it.platform)} ${flag} «${it.term}»</div>
+            <div class="hs">${it.appTitle || it.appId}</div>
+          </div>
+          ${miniSpark(hist)}
+          <div class="hr ${last.rank ? (last.rank <= 10 ? 'rank-top' : '') : ''}">
+            ${last.rank ? '#' + last.rank : '—'}</div>
+        </div>`;
+      }).join('');
+    } catch (e) {
+      histResult.innerHTML = '<p class="muted">Не удалось загрузить историю: ' + (e.message || e) + '</p>';
+    }
+  }
 
   // Скачивание CSV через blob-ссылку.
   async function exportCsv(url, filename) {
@@ -274,7 +351,7 @@
     });
   }
 
-  async function discoverKeywords() {
+  async function discoverKeywords(force) {
     const url = location.href;
     if (!parsePage(url)) {
       resultEl.innerHTML = `<p class="muted" style="margin-top:12px">
@@ -282,11 +359,12 @@
       return;
     }
     goBtn.disabled = true;
+    recalcBtn.disabled = true;
     resultEl.innerHTML = `<p class="muted" style="margin-top:12px">
       <span class="spinner"></span>запускаем подбор ключей…</p>`;
     try {
-      let state = await fetch(API + '/discover/by-url?url=' + encodeURIComponent(url))
-        .then((r) => r.json());
+      let state = await fetch(API + '/discover/by-url?url=' + encodeURIComponent(url)
+        + (force ? '&fresh=1' : '')).then((r) => r.json());
       if (state.error) {
         resultEl.innerHTML = '<p class="muted">Ошибка: ' + state.error + '</p>';
         return;
@@ -307,6 +385,7 @@
       resultEl.innerHTML = '<p class="muted">Не удалось получить ключи: ' + (e.message || e) + '</p>';
     } finally {
       goBtn.disabled = false;
+      recalcBtn.disabled = false;
     }
   }
 
@@ -374,7 +453,9 @@
     panel.classList.remove('open');
     fab.style.display = '';
   });
-  goBtn.addEventListener('click', discoverKeywords);
+  goBtn.addEventListener('click', () => discoverKeywords(false));
+  recalcBtn.addEventListener('click', () => discoverKeywords(true));
   checkBtn.addEventListener('click', checkKeyword);
   kwInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') checkKeyword(); });
+  histRefresh.addEventListener('click', () => { histLoaded = true; loadHistory(); });
 })();

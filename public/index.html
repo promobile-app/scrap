@@ -226,7 +226,9 @@
       <div class="toolbar">
         <input id="urlInput" style="flex:1;min-width:280px"
           placeholder="https://apps.apple.com/ua/app/.../id… или play.google.com/store/apps/details?id=…" />
-        <button onclick="discoverByLink()">Получить ключи</button>
+        <button onclick="discoverByLink(false)">Получить ключи</button>
+        <button class="theme-btn" onclick="discoverByLink(true)"
+          title="Подобрать заново, игнорируя кэш">↻ Пересчитать</button>
         <button class="theme-btn" onclick="downloadCsv(API + '/discover/export.csv')"
           title="Выгрузить ключи по всем приложениям">⬇ Экспорт всех</button>
       </div>
@@ -698,14 +700,14 @@
         (насыщенность выдачи и сила конкурентов), не точные данные Apple Search Ads.</p>`;
     }
 
-    async function discoverByLink() {
+    async function discoverByLink(force) {
       const url = document.getElementById('urlInput').value.trim();
       const el = document.getElementById('urlResult');
       if (!url) return;
       el.innerHTML = '<p class="muted" style="margin-top:10px">запускаем подбор ключей…</p>';
       try {
-        let state = await fetch(API + '/discover/by-url?url=' + encodeURIComponent(url))
-          .then(r => r.json());
+        let state = await fetch(API + '/discover/by-url?url=' + encodeURIComponent(url)
+          + (force ? '&fresh=1' : '')).then(r => r.json());
         if (state.error) { el.innerHTML = '<p class="muted">Ошибка: ' + state.error + '</p>'; return; }
         renderUrlJob(state);
         let guard = 0;
