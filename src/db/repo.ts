@@ -176,3 +176,73 @@ export async function trackedKeywords(): Promise<KeywordRow[]> {
     `SELECT id, term, country, tracked FROM keywords WHERE tracked = TRUE`,
   );
 }
+
+// --- Фоновые задачи подбора ключей --------------------------------------
+
+export interface DiscoveryJobRow {
+  id: number;
+  jobKey: string;
+  platform: string;
+  appId: string;
+  appTitle: string | null;
+  country: string;
+  status: 'pending' | 'running' | 'done' | 'error';
+  total: number;
+  processed: number;
+  keywords: unknown[];
+  error: string | null;
+  updatedAt: string;
+}
+
+const JOB_COLS = `id, job_key AS "jobKey", platform, app_id AS "appId",
+  app_title AS "appTitle", country, status, total, processed, keywords,
+  error, updated_at AS "updatedAt"`;
+
+export async function createDiscoveryJob(
+  jobKey: string, platform: string, appId: string, country: string,
+): Promise<DiscoveryJobRow> {
+  const rows = await query<DiscoveryJobRow>(
+    `INSERT INTO discovery_jobs (job_key, platform, app_id, country)
+     VALUES ($1, $2, $3, $4) RETURNING ${JOB_COLS}`,
+    [jobKey, platform, appId, country],
+  );
+  return rows[0];
+}
+
+export async function getDiscoveryJob(id: number): Promise<DiscoveryJobRow | null> {
+  const rows = await query<DiscoveryJobRow>(
+    `SELECT ${JOB_COLS} FROM discovery_jobs WHERE id = $1`, [id],
+  );
+  return rows[0] ?? null;
+}
+
+export async function latestDiscoveryJob(jobKey: string): Promise<DiscoveryJobRow | null> {
+  const rows = await query<DiscoveryJobRow>(
+    `SELECT ${JOB_COLS} FROM discovery_jobs WHERE job_key = $1
+     ORDER BY created_at DESC LIMIT 1`, [jobKey],
+  );
+  return rows[0] ?? null;
+}
+
+export async function updateDiscoveryJob(
+  id: number,
+  fields: Partial<{
+    appTitle: string; status: string; total: number;
+    processed: number; keywords: unknown[]; error: string;
+  }>,
+): Promise<void> {
+  const sets: string[] = ['updated_at = now()'];
+  const params: unknown[] = [];
+  const map: Record<string, string> = {
+    appTitle: 'app_title', status: 'status', total: 'total',
+    processed: 'processed', keywords: 'keywords', error: 'error',
+  };
+  for (const [k, col] of Object.entries(map)) {
+    if (k in fields) {
+      params.push(k === 'keywords' ? JSON.stringify((fields as Record<string, unknown>)[k]) : (fields as Record<string, unknown>)[k]);
+      sets.push(`${col} = $${params.length}`);
+    }
+  }
+  params.push(id);
+  await query(`UPDATE discovery_jobs SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
+}

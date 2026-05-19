@@ -13,7 +13,7 @@ import { topChart } from '../scrapers/charts.js';
 import { estimateVolume } from '../analytics/volume.js';
 import { estimateDifficulty } from '../analytics/difficulty.js';
 import { discoverKeywords } from '../analytics/discovery.js';
-import { discoverByUrl } from '../analytics/discoverByUrl.js';
+import { startDiscoveryJob, getDiscoveryJobState } from '../analytics/discoverByUrl.js';
 import {
   upsertApp, upsertKeyword, linkAppKeyword,
   saveMetricCheck, getMetricHistory, distinctMetricTargets,
@@ -186,16 +186,26 @@ app.get<{ Params: { id: string }; Querystring: { country?: string } }>(
   },
 );
 
-// Подбор ключей по ссылке на приложение (App Store / Google Play).
+// Подбор ключей по ссылке: запускает (или возвращает) фоновую задачу.
 app.get<{ Querystring: { url?: string } }>(
   '/discover/by-url',
   async (req, reply) => {
     if (!req.query.url) return reply.code(400).send({ error: 'url required' });
     try {
-      return await discoverByUrl(req.query.url);
+      return await startDiscoveryJob(req.query.url);
     } catch (e) {
       return reply.code(400).send({ error: e instanceof Error ? e.message : 'ошибка' });
     }
+  },
+);
+
+// Поллинг состояния фоновой задачи подбора ключей.
+app.get<{ Params: { id: string } }>(
+  '/discover/job/:id',
+  async (req, reply) => {
+    const state = await getDiscoveryJobState(Number(req.params.id));
+    if (!state) return reply.code(404).send({ error: 'job not found' });
+    return state;
   },
 );
 

@@ -89,3 +89,23 @@ CREATE TABLE IF NOT EXISTS volume_estimates (
 );
 CREATE INDEX IF NOT EXISTS idx_volume_kw_time
   ON volume_estimates (keyword_id, captured_at DESC);
+
+-- Фоновые задачи подбора ключей по приложению (до 1000 ключей).
+-- keywords хранит массив найденных ключей с метриками (заполняется по ходу).
+CREATE TABLE IF NOT EXISTS discovery_jobs (
+  id          BIGSERIAL PRIMARY KEY,
+  job_key     TEXT NOT NULL,        -- platform|appId|country
+  platform    TEXT NOT NULL,
+  app_id      TEXT NOT NULL,
+  app_title   TEXT,
+  country     TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'pending', -- pending|running|done|error
+  total       INTEGER NOT NULL DEFAULT 0,
+  processed   INTEGER NOT NULL DEFAULT 0,
+  keywords    JSONB NOT NULL DEFAULT '[]',
+  error       TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_discovery_jobs_key
+  ON discovery_jobs (job_key, created_at DESC);
