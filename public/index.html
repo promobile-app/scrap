@@ -217,6 +217,22 @@
   <main>
     <div class="card">
       <div class="card-head">
+        <div class="card-ico">🔗</div>
+        <div>
+          <h2>Ключи по ссылке</h2>
+          <p class="sub">Вставьте ссылку на приложение в App Store или Google Play — получите релевантные ключи с метриками</p>
+        </div>
+      </div>
+      <div class="toolbar">
+        <input id="urlInput" style="flex:1;min-width:280px"
+          placeholder="https://apps.apple.com/ua/app/.../id… или play.google.com/store/apps/details?id=…" />
+        <button onclick="discoverByLink()">Получить ключи</button>
+      </div>
+      <div id="urlResult"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
         <div class="card-ico">🎯</div>
         <div>
           <h2>Подбор ключей по приложению</h2>
@@ -633,6 +649,48 @@
           <path d="M9.2 14.1h5.6"/>
         </g>
       </svg>`;
+    }
+
+    // Подбор ключей по вставленной ссылке на приложение.
+    async function discoverByLink() {
+      const url = document.getElementById('urlInput').value.trim();
+      const el = document.getElementById('urlResult');
+      if (!url) return;
+      el.innerHTML = '<p class="muted" style="margin-top:10px">ищем релевантные ключи и метрики… это может занять до минуты</p>';
+      let d;
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 120000);
+        const res = await fetch(API + '/discover/by-url?url=' + encodeURIComponent(url),
+          { signal: ctrl.signal });
+        clearTimeout(timer);
+        d = await res.json();
+      } catch (e) {
+        el.innerHTML = '<p class="muted">Ошибка запроса: ' + (e.message || e) + '</p>';
+        return;
+      }
+      if (d.error) { el.innerHTML = '<p class="muted">Ошибка: ' + d.error + '</p>'; return; }
+      if (!d.keywords || !d.keywords.length) {
+        el.innerHTML = '<p class="muted">Релевантные ключи не найдены.</p>';
+        return;
+      }
+      el.innerHTML = `
+        <p class="muted" style="margin:10px 0 2px">${platformIcon(d.platform)}
+          ${FLAGS[d.country] || (d.country || '').toUpperCase()} ·
+          <b>${d.title}</b> · ${d.keywords.length} ключей</p>
+        <table>
+          <tr><th>Ключ</th><th>Позиция</th><th>Объём</th><th>Сложность</th><th>Конкуренты</th></tr>
+          ${d.keywords.map(k => `<tr>
+            <td>${k.term}</td>
+            <td class="${k.rank ? (k.rank <= 10 ? 'rank-top' : '') : 'rank-none'}">
+              ${k.rank ? '#' + k.rank : '—'}</td>
+            <td>${k.volume}</td>
+            <td>${k.difficulty}</td>
+            <td>${k.totalResults}</td>
+          </tr>`).join('')}
+        </table>
+        <p class="muted" style="margin-top:8px">Объём и сложность — приближённые оценки
+        (насыщенность выдачи и сила конкурентов), не точные данные Apple Search Ads.</p>`;
     }
 
     async function loadHistoryAll() {

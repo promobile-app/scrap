@@ -13,6 +13,7 @@ import { topChart } from '../scrapers/charts.js';
 import { estimateVolume } from '../analytics/volume.js';
 import { estimateDifficulty } from '../analytics/difficulty.js';
 import { discoverKeywords } from '../analytics/discovery.js';
+import { discoverByUrl } from '../analytics/discoverByUrl.js';
 import {
   upsertApp, upsertKeyword, linkAppKeyword,
   saveMetricCheck, getMetricHistory, distinctMetricTargets,
@@ -182,6 +183,19 @@ app.get<{ Params: { id: string }; Querystring: { country?: string } }>(
       Number(req.params.id),
       req.query.country ?? config.defaultCountry,
     );
+  },
+);
+
+// Подбор ключей по ссылке на приложение (App Store / Google Play).
+app.get<{ Querystring: { url?: string } }>(
+  '/discover/by-url',
+  async (req, reply) => {
+    if (!req.query.url) return reply.code(400).send({ error: 'url required' });
+    try {
+      return await discoverByUrl(req.query.url);
+    } catch (e) {
+      return reply.code(400).send({ error: e instanceof Error ? e.message : 'ошибка' });
+    }
   },
 );
 
