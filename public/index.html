@@ -670,20 +670,21 @@
         return;
       }
       if (d.error) { el.innerHTML = '<p class="muted">Ошибка: ' + d.error + '</p>'; return; }
-      if (!d.keywords || !d.keywords.length) {
-        el.innerHTML = '<p class="muted">Релевантные ключи не найдены.</p>';
+      // Показываем только ключи, по которым приложение реально ранжируется.
+      const ranked = (d.keywords || []).filter(k => k.rank != null);
+      if (!ranked.length) {
+        el.innerHTML = '<p class="muted">Приложение не ранжируется ни по одному из найденных ключей.</p>';
         return;
       }
       el.innerHTML = `
         <p class="muted" style="margin:10px 0 2px">${platformIcon(d.platform)}
           ${FLAGS[d.country] || (d.country || '').toUpperCase()} ·
-          <b>${d.title}</b> · ${d.keywords.length} ключей</p>
+          <b>${d.title}</b> · ${ranked.length} ключей с позицией</p>
         <table>
           <tr><th>Ключ</th><th>Позиция</th><th>Объём</th><th>Сложность</th><th>Конкуренты</th></tr>
-          ${d.keywords.map(k => `<tr>
+          ${ranked.map(k => `<tr>
             <td>${k.term}</td>
-            <td class="${k.rank ? (k.rank <= 10 ? 'rank-top' : '') : 'rank-none'}">
-              ${k.rank ? '#' + k.rank : '—'}</td>
+            <td class="${k.rank <= 10 ? 'rank-top' : ''}">#${k.rank}</td>
             <td>${k.volume}</td>
             <td>${k.difficulty}</td>
             <td>${k.totalResults}</td>

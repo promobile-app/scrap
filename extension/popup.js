@@ -48,18 +48,20 @@ function renderResult(d) {
   targetEl.innerHTML = `${platformIcon(d.platform)}
     <span>${FLAGS[d.country] || (d.country || '').toUpperCase()}</span>
     <b>${d.title}</b>`;
-  if (!d.keywords || !d.keywords.length) {
-    resultEl.innerHTML = '<p class="muted">Релевантные ключи не найдены.</p>';
+  // Показываем только ключи, по которым приложение реально ранжируется.
+  const ranked = (d.keywords || []).filter((k) => k.rank != null);
+  if (!ranked.length) {
+    resultEl.innerHTML = '<p class="muted">Приложение не ранжируется ни по одному из найденных ключей.</p>';
     return;
   }
   resultEl.innerHTML = `
+    <p class="muted" style="margin:8px 0">${ranked.length} ключей с позицией</p>
     <table>
       <tr><th>Ключ</th><th class="num">Поз.</th><th class="num">Объём</th>
         <th class="num">Сложн.</th><th class="num">Конк.</th></tr>
-      ${d.keywords.map((k) => `<tr>
+      ${ranked.map((k) => `<tr>
         <td>${k.term}</td>
-        <td class="num ${k.rank ? (k.rank <= 10 ? 'rank-top' : '') : 'rank-none'}">
-          ${k.rank ? '#' + k.rank : '—'}</td>
+        <td class="num ${k.rank <= 10 ? 'rank-top' : ''}">#${k.rank}</td>
         <td class="num">${k.volume}</td>
         <td class="num">${k.difficulty}</td>
         <td class="num">${k.totalResults}</td>
