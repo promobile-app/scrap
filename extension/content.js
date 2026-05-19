@@ -216,6 +216,23 @@
     });
   });
 
+  // Скачивание CSV через blob-ссылку.
+  async function exportCsv(url, filename) {
+    try {
+      const res = await fetch(url);
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    } catch (e) {
+      alert('Не удалось выгрузить CSV: ' + (e.message || e));
+    }
+  }
+
   // --- Вкладка «Ключи приложения» ---
   function renderKeywords(d) {
     const flag = FLAGS[d.country] || (d.country || '').toUpperCase();
@@ -233,16 +250,28 @@
       <td class="num">${k.difficulty}</td>
       <td class="num">${k.totalResults}</td>
     </tr>`).join('');
+    const sBtn = 'padding:8px 12px;border-radius:11px;background:#202024;color:#f1f1f3;'
+      + 'border:1px solid #2c2c31;font-weight:700;font-size:12px;cursor:pointer';
+    const exportRow = running ? '' : `<div style="display:flex;gap:8px;margin:10px 0 2px">
+      <button style="${sBtn}" data-export="${API}/discover/job/${d.jobId}/export.csv"
+        data-file="keywords-${d.appId}.csv">⬇ Экспорт CSV</button>
+      <button style="${sBtn}" data-export="${API}/discover/export.csv"
+        data-file="all-keywords.csv">Все приложения</button>
+    </div>`;
     resultEl.innerHTML = `
       <div class="target">${platformIcon(d.platform)}
         <span>${flag}</span><b>${d.appTitle || d.appId}</b></div>
       ${progress}
+      ${exportRow}
       ${rows ? `<div class="tw"><table>
         <tr><th>Ключ</th><th class="num">Поз.</th><th class="num">Объём</th>
           <th class="num">Сложн.</th><th class="num">Конк.</th></tr>${rows}</table></div>
         <p class="muted" style="margin-top:9px">Объём и сложность — приближённые оценки,
         не данные Apple Search Ads.</p>`
         : (running ? '' : '<p class="muted">Приложение не ранжируется ни по одному из найденных ключей.</p>')}`;
+    resultEl.querySelectorAll('[data-export]').forEach((b) => {
+      b.addEventListener('click', () => exportCsv(b.dataset.export, b.dataset.file));
+    });
   }
 
   async function discoverKeywords() {

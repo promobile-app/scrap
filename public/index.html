@@ -227,6 +227,8 @@
         <input id="urlInput" style="flex:1;min-width:280px"
           placeholder="https://apps.apple.com/ua/app/.../id… или play.google.com/store/apps/details?id=…" />
         <button onclick="discoverByLink()">Получить ключи</button>
+        <button class="theme-btn" onclick="downloadCsv(API + '/discover/export.csv')"
+          title="Выгрузить ключи по всем приложениям">⬇ Экспорт всех</button>
       </div>
       <div id="urlResult"></div>
     </div>
@@ -652,6 +654,15 @@
     }
 
     // Подбор ключей по вставленной ссылке на приложение.
+    // Скачивание CSV: anchor с Content-Disposition attachment.
+    function downloadCsv(url) {
+      const a = document.createElement('a');
+      a.href = url;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+
     function renderUrlJob(d) {
       const el = document.getElementById('urlResult');
       const ranked = (d.keywords || []).filter(k => k.rank != null);
@@ -668,8 +679,11 @@
           : '<p class="muted">Приложение не ранжируется ни по одному из найденных ключей.</p>');
         return;
       }
+      const exportBtn = running ? '' : `<button class="theme-btn" style="margin:6px 0"
+        onclick="downloadCsv(API + '/discover/job/${d.jobId}/export.csv')">⬇ Экспорт CSV</button>`;
       el.innerHTML = `
         ${head}
+        ${exportBtn}
         <table>
           <tr><th>Ключ</th><th>Позиция</th><th>Объём</th><th>Сложность</th><th>Конкуренты</th></tr>
           ${ranked.map(k => `<tr>
