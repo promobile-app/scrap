@@ -4,6 +4,9 @@ const API = 'https://scrap-production-c0db.up.railway.app';
 const goBtn = document.getElementById('go');
 const resultEl = document.getElementById('result');
 const targetEl = document.getElementById('target');
+const kwInput = document.getElementById('kwInput');
+const checkBtn = document.getElementById('checkBtn');
+const metricResultEl = document.getElementById('metricResult');
 
 const FLAGS = {
   us: '🇺🇸', gb: '🇬🇧', de: '🇩🇪', ua: '🇺🇦', ru: '🇷🇺', fr: '🇫🇷', pl: '🇵🇱',
@@ -27,15 +30,27 @@ function platformIcon(platform) {
   </svg>`;
 }
 
-// Проверяем, что вкладка — страница приложения в App Store / Google Play.
-function isStoreUrl(url) {
-  if (!url) return false;
+// Разбор страницы магазина: платформа, ID приложения, гео.
+function parsePage(url) {
   try {
-    const h = new URL(url).hostname.toLowerCase();
-    return h.endsWith('apple.com') || h.endsWith('play.google.com');
+    const u = new URL(url);
+    const h = u.hostname.toLowerCase();
+    if (h.endsWith('apple.com')) {
+      const id = u.pathname.match(/id(\d+)/);
+      if (!id || !/\/app\//.test(u.pathname)) return null;
+      const country = (u.pathname.match(/\/([a-z]{2})\/app\//i)?.[1] || 'us').toLowerCase();
+      return { platform: 'ios', appId: id[1], country };
+    }
+    if (h.endsWith('play.google.com')) {
+      if (!u.pathname.includes('/store/apps/details')) return null;
+      const appId = u.searchParams.get('id');
+      if (!appId) return null;
+      return { platform: 'android', appId, country: (u.searchParams.get('gl') || 'us').toLowerCase() };
+    }
   } catch {
-    return false;
+    return null;
   }
+  return null;
 }
 
 async function activeTabUrl() {
@@ -43,12 +58,22 @@ async function activeTabUrl() {
   return tab?.url ?? '';
 }
 
-function renderResult(d) {
+// --- Вкладки ---
+document.querySelectorAll('.tab').forEach((tab) => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
+    document.querySelectorAll('.pane').forEach((p) => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('pane-' + tab.dataset.tab).classList.add('active');
+  });
+});
+
+// --- Вкладка «Ключи приложения» ---
+function renderKeywords(d) {
   targetEl.style.display = 'flex';
   targetEl.innerHTML = `${platformIcon(d.platform)}
     <span>${FLAGS[d.country] || (d.country || '').toUpperCase()}</span>
     <b>${d.title}</b>`;
-  // Показываем только ключи, по которым приложение реально ранжируется.
   const ranked = (d.keywords || []).filter((k) => k.rank != null);
   if (!ranked.length) {
     resultEl.innerHTML = '<p class="muted">Приложение не ранжируется ни по одному из найденных ключей.</p>';
@@ -72,12 +97,12 @@ function renderResult(d) {
     не данные Apple Search Ads.</p>`;
 }
 
-async function run() {
+async function discoverKeywords() {
   const url = await activeTabUrl();
-  if (!isStoreUrl(url)) {
+  if (!parsePage(url)) {
     resultEl.innerHTML = `<p class="muted" style="margin-top:12px">
       Откройте страницу приложения в App Store (apps.apple.com)
-      или Google Play (play.google.com) и нажмите кнопку снова.</p>`;
+      или Google Play (play.google.com).</p>`;
     return;
   }
   goBtn.disabled = true;
@@ -92,11 +117,8 @@ async function run() {
       { signal: ctrl.signal });
     clearTimeout(timer);
     const d = await res.json();
-    if (d.error) {
-      resultEl.innerHTML = '<p class="muted">Ошибка: ' + d.error + '</p>';
-    } else {
-      renderResult(d);
-    }
+    if (d.error) resultEl.innerHTML = '<p class="muted">Ошибка: ' + d.error + '</p>';
+    else renderKeywords(d);
   } catch (e) {
     const msg = e.name === 'AbortError' ? 'превышено время ожидания' : (e.message || e);
     resultEl.innerHTML = '<p class="muted">Не удалось получить ключи: ' + msg + '</p>';
@@ -105,11 +127,67 @@ async function run() {
   }
 }
 
-goBtn.addEventListener('click', run);
+// --- Вкладка «Метрики по ключу» ---
+function renderMetric(d) {
+  const top = (d.topApps || []).map((a) => `<tr>
+    <td class="num">${a.position}</td>
+    <td class="${a.isTarget ? 'tgt' : ''}">${a.isTarget ? '▶ ' : ''}${a.title}</td>
+  </tr>`).join('');
+  metricResultEl.innerHTML = `
+    <div class="target">${platformIcon(d.platform)}
+      <span>${FLAGS[d.country] || (d.country || '').toUpperCase()}</span>
+      <b>${d.app ? d.app.title : ''}</b></div>
+    <div class="mgrid">
+      <div class="mtile"><div class="mv ${d.rank ? (d.inTop10 ? 'rank-top' : '') : ''}">
+        ${d.rank ? '#' + d.rank : '—'}</div><div class="ml">Позиция «${d.term}»</div></div>
+      <div class="mtile"><div class="mv">${d.volume ? d.volume.score : '—'}</div>
+        <div class="ml">Объём${d.volume ? ' (' + d.volume.source + ')' : ''}</div></div>
+      <div class="mtile"><div class="mv">${d.difficulty ? d.difficulty.score : '—'}</div>
+        <div class="ml">Сложность</div></div>
+      <div class="mtile"><div class="mv">${d.totalResults ?? '—'}</div>
+        <div class="ml">Конкурентов</div></div>
+    </div>
+    ${top ? `<table><tr><th class="num">#</th><th>Топ выдачи по «${d.term}»</th></tr>${top}</table>` : ''}`;
+}
 
-// Подсказываем, на каком приложении сейчас находимся.
+async function checkKeyword() {
+  const term = kwInput.value.trim();
+  if (!term) return;
+  const url = await activeTabUrl();
+  const p = parsePage(url);
+  if (!p) {
+    metricResultEl.innerHTML = `<p class="muted" style="margin-top:12px">
+      Откройте страницу приложения в App Store или Google Play.</p>`;
+    return;
+  }
+  checkBtn.disabled = true;
+  metricResultEl.innerHTML = `<p class="muted" style="margin-top:12px">
+    <span class="spinner"></span>считаем метрики…</p>`;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 90000);
+    const q = `country=${p.country}&platform=${p.platform}&term=${encodeURIComponent(term)}`;
+    const res = await fetch(
+      `${API}/apps/${encodeURIComponent(p.appId)}/metrics?${q}`, { signal: ctrl.signal });
+    clearTimeout(timer);
+    const d = await res.json();
+    if (d.error) metricResultEl.innerHTML = '<p class="muted">Ошибка: ' + d.error + '</p>';
+    else renderMetric(d);
+  } catch (e) {
+    const msg = e.name === 'AbortError' ? 'превышено время ожидания' : (e.message || e);
+    metricResultEl.innerHTML = '<p class="muted">Не удалось посчитать метрики: ' + msg + '</p>';
+  } finally {
+    checkBtn.disabled = false;
+  }
+}
+
+goBtn.addEventListener('click', discoverKeywords);
+checkBtn.addEventListener('click', checkKeyword);
+kwInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') checkKeyword(); });
+
+// Подсказываем, если вкладка — не страница магазина.
 activeTabUrl().then((url) => {
-  if (!isStoreUrl(url)) {
+  if (!parsePage(url)) {
     resultEl.innerHTML = `<p class="muted" style="margin-top:12px">
       Откройте страницу приложения в App Store или Google Play.</p>`;
   }

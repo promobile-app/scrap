@@ -34,23 +34,45 @@
     }
     .title { font-weight: 700; font-size: 14px; }
     .title span { color: var(--brand); }
+    .tabs { display: flex; gap: 4px; padding: 10px 16px 0; }
+    .tab {
+      flex: 1; padding: 9px 8px; border: 0; cursor: pointer;
+      background: var(--surface-2); color: var(--muted);
+      font: inherit; font-size: 12px; font-weight: 700;
+      border-radius: 9px 9px 0 0;
+    }
+    .tab.active { background: var(--card); color: var(--ink); }
     main { padding: 14px 16px 18px; }
-    button {
-      font: inherit; font-weight: 600;
+    .pane { display: none; }
+    .pane.active { display: block; }
+    input {
+      width: 100%; padding: 10px 12px; margin-bottom: 9px;
+      border: 1px solid var(--line); border-radius: 9px; outline: none;
+      background: var(--card); color: var(--ink); font: inherit;
+    }
+    input:focus { border-color: var(--brand); }
+    .go {
+      font: inherit; font-weight: 700;
       width: 100%;
-      padding: 10px 14px; border: 0; border-radius: 9px; cursor: pointer;
+      padding: 11px 14px; border: 0; border-radius: 9px; cursor: pointer;
       background: linear-gradient(135deg, #5b5ef4, #8b5cf6);
       color: #fff;
     }
-    button:disabled { opacity: .55; cursor: not-allowed; }
+    .go:disabled { opacity: .55; cursor: not-allowed; }
     .muted { color: var(--muted); font-size: 12px; }
     .target {
-      display: flex; align-items: center; gap: 7px;
+      display: flex; align-items: center; gap: 7px; margin: 12px 0;
       background: var(--surface-2);
-      border: 1px solid var(--line); border-radius: 9px;
-      padding: 9px 11px; margin-bottom: 11px;
+      border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px;
     }
     .target b { font-size: 13px; }
+    .mgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; }
+    .mtile {
+      background: var(--surface-2); border: 1px solid var(--line);
+      border-radius: 10px; padding: 11px 12px;
+    }
+    .mtile .mv { font-size: 23px; font-weight: 800; line-height: 1; }
+    .mtile .ml { font-size: 11px; color: var(--muted); margin-top: 5px; font-weight: 600; }
     table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 12.5px; }
     th {
       text-align: left; padding: 7px 8px; color: var(--muted);
@@ -61,7 +83,7 @@
     tr:last-child td { border-bottom: 0; }
     .num { text-align: right; font-variant-numeric: tabular-nums; }
     .rank-top { color: var(--green); font-weight: 700; }
-    .rank-none { color: var(--muted); opacity: .6; }
+    .tgt { color: #8b8dff; font-weight: 700; }
     .result { max-height: 360px; overflow-y: auto; margin-top: 4px; }
     .spinner {
       width: 15px; height: 15px; border-radius: 50%;
@@ -84,10 +106,21 @@
     </div>
     <div class="title">Rank<span>Radar</span></div>
   </header>
+  <div class="tabs">
+    <button class="tab active" data-tab="kw">Ключи приложения</button>
+    <button class="tab" data-tab="metric">Метрики по ключу</button>
+  </div>
   <main>
-    <div id="target" class="target" style="display:none"></div>
-    <button id="go">Подобрать ключи</button>
-    <div id="result" class="result"></div>
+    <div class="pane active" id="pane-kw">
+      <div id="target" class="target" style="display:none"></div>
+      <button id="go" class="go">Подобрать ключи</button>
+      <div id="result" class="result"></div>
+    </div>
+    <div class="pane" id="pane-metric">
+      <input id="kwInput" placeholder="ключевое слово" />
+      <button id="checkBtn" class="go">Проверить позицию</button>
+      <div id="metricResult" class="result"></div>
+    </div>
   </main>
   <script src="popup.js"></script>
 </body>
