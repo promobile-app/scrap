@@ -28,9 +28,18 @@ function csvCell(v: unknown): string {
   return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
+// Разделитель «;» — корректно открывается двойным кликом в Excel
+// (в т.ч. русская локаль) и автоопределяется при импорте в Google Sheets.
+const CSV_SEP = ';';
+
+/** Строка CSV из ячеек. */
+function csvRow(cells: unknown[]): string {
+  return cells.map(csvCell).join(CSV_SEP);
+}
+
 /** Сборка CSV с BOM (чтобы Excel корректно читал кириллицу). */
 function buildCsv(header: string[], rows: unknown[][]): string {
-  return '﻿' + [header, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n');
+  return '﻿' + [csvRow(header), ...rows.map(csvRow)].join('\r\n');
 }
 
 const app = Fastify({ logger: true });
@@ -243,23 +252,24 @@ app.get<{ Params: { id: string } }>(
   },
 );
 
-// Выгрузка ключей по всем приложениям в один CSV.
+// Выгрузка ключей по всем приложениям — сгруппировано по приложению.
 app.get('/discover/export.csv', async (_req, reply) => {
   const jobs = await allDoneDiscoveryJobs();
-  const rows: unknown[][] = [];
+  const header = ['Ключ', 'Позиция', 'Объём', 'Сложность', 'Конкуренты'];
+  const blocks: string[] = [];
   for (const j of jobs) {
-    for (const k of (j.keywords as UrlKeyword[]) ?? []) {
-      if (k.rank == null) continue;
-      rows.push([
-        j.platform, j.appId, j.appTitle ?? '', j.country,
-        k.term, k.rank, k.volume, k.difficulty, k.totalResults,
-      ]);
-    }
+    const ranked = ((j.keywords as UrlKeyword[]) ?? []).filter((k) => k.rank != null);
+    if (!ranked.length) continue;
+    const store = j.platform === 'android' ? 'Google Play' : 'App Store';
+    const lines = [
+      csvRow([`${j.appTitle ?? j.appId} — ${store}, ${j.country.toUpperCase()}`]),
+      csvRow(header),
+      ...ranked.map((k) => csvRow([k.term, k.rank, k.volume, k.difficulty, k.totalResults])),
+      '',
+    ];
+    blocks.push(lines.join('\r\n'));
   }
-  const csv = buildCsv(
-    ['Платформа', 'App ID', 'Приложение', 'Гео', 'Ключ', 'Позиция', 'Объём', 'Сложность', 'Конкуренты'],
-    rows,
-  );
+  const csv = '﻿' + (blocks.join('\r\n') || csvRow(['Нет данных']));
   reply.header('Content-Type', 'text/csv; charset=utf-8');
   reply.header('Content-Disposition', 'attachment; filename="all-keywords.csv"');
   return csv;
