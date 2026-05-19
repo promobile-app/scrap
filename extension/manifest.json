@@ -1,14 +1,34 @@
 {
   "manifest_version": 3,
   "name": "RankRadar — ключи по приложению",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Релевантные ключевые слова с метриками для открытой страницы App Store / Google Play.",
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "RankRadar — подобрать ключи"
+    "default_title": "RankRadar — подобрать ключи",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
   },
   "permissions": ["activeTab"],
   "host_permissions": [
     "https://scrap-production-c0db.up.railway.app/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://apps.apple.com/*",
+        "https://play.google.com/store/apps/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
   ]
 }
