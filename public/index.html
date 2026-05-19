@@ -91,6 +91,15 @@
       border-color: var(--brand);
       box-shadow: 0 0 0 3px rgba(91,94,244,.12);
     }
+    /* Автозаполнение браузера не должно ломать тёмную тему */
+    input:-webkit-autofill,
+    input:-webkit-autofill:hover,
+    input:-webkit-autofill:focus {
+      -webkit-text-fill-color: var(--ink);
+      -webkit-box-shadow: 0 0 0 1000px var(--card) inset;
+      caret-color: var(--ink);
+      transition: background-color 9999s ease 0s;
+    }
     select { cursor: pointer; }
     textarea { resize: vertical; line-height: 1.5; }
     .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
@@ -348,8 +357,9 @@
     function renderTableApps() {
       const el = document.getElementById('tableApps');
       if (!tableApps.length) { el.innerHTML = '<span class="muted">приложения не добавлены</span>'; return; }
-      el.innerHTML = tableApps.map(a => `<span style="display:inline-block;background:#f0f1ff;
-        border:1px solid rgba(91,94,244,.25);border-radius:14px;padding:5px 12px;margin:3px 5px 3px 0;font-size:13px">
+      el.innerHTML = tableApps.map(a => `<span style="display:inline-block;background:var(--surface-2);
+        color:var(--ink);border:1px solid rgba(91,94,244,.35);border-radius:14px;
+        padding:5px 12px;margin:3px 5px 3px 0;font-size:13px">
         ${a.title} <b style="cursor:pointer;color:#e0245e" onclick="removeFromTable('${a.appId}')">✕</b></span>`).join('');
     }
 
