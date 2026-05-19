@@ -73,9 +73,9 @@ function renderIcon(size) {
       let R = 0, G = 0, B = 0, A = 0;
       if (insideRounded(u, v, cr)) {
         const t = clamp01((u + v) / 2);
-        R = lerp(0x5b, 0x8b, t);
-        G = lerp(0x5e, 0x5c, t);
-        B = lerp(0xf4, 0xf6, t);
+        R = lerp(0x4a, 0x2f, t);
+        G = lerp(0x7b, 0x5f, t);
+        B = lerp(0xff, 0xe0, t);
         A = 255;
         const dist = Math.hypot(u - 0.5, v - 0.5);
         const white = (amt) => {
