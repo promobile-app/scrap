@@ -278,14 +278,16 @@ async function runJob(
  * Запускает (или возвращает уже идущую/готовую) фоновую задачу подбора ключей
  * по ссылке на приложение в App Store / Google Play.
  */
-export async function startDiscoveryJob(rawUrl: string): Promise<DiscoveryJobState> {
+export async function startDiscoveryJob(
+  rawUrl: string, force = false,
+): Promise<DiscoveryJobState> {
   const { platform, appId, country } = parseStoreUrl(rawUrl);
   const jobKey = `${platform}|${appId}|${country}`;
 
   const existing = await latestDiscoveryJob(jobKey);
   if (existing) {
     const age = Date.now() - new Date(existing.updatedAt).getTime();
-    if (existing.status === 'done' && age < DONE_TTL_MS) {
+    if (!force && existing.status === 'done' && age < DONE_TTL_MS) {
       return { ...rowToState(existing), cached: true };
     }
     if ((existing.status === 'running' || existing.status === 'pending') && age < STALE_MS) {

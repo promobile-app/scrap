@@ -95,6 +95,22 @@
     .rank-top { color: var(--green); font-weight: 700; }
     .tgt { color: #5b8bff; font-weight: 700; }
     .result { max-height: 360px; overflow-y: auto; margin-top: 4px; }
+    .hrow {
+      display: flex; align-items: center; gap: 9px;
+      background: var(--surface-2); border: 1px solid var(--line);
+      border-radius: 13px; padding: 9px 12px; margin-bottom: 7px;
+    }
+    .hrow .hmain { flex: 1; min-width: 0; }
+    .hrow .ht { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .hrow .hs { font-size: 11px; color: var(--muted); margin-top: 2px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .hrow .hr { font-size: 15px; font-weight: 800; }
+    .secbtn {
+      padding: 8px 12px; border-radius: 11px; background: var(--surface-2);
+      color: var(--ink); border: 1px solid var(--line);
+      font: inherit; font-weight: 700; font-size: 12px; cursor: pointer;
+    }
+    .secbtn:hover { background: #2a2a30; }
     .spinner {
       width: 15px; height: 15px; border-radius: 50%;
       border: 2px solid var(--line); border-top-color: #5b8bff;
@@ -117,19 +133,27 @@
     <div class="title">Rank<span>Radar</span></div>
   </header>
   <div class="tabs">
-    <button class="tab active" data-tab="kw">Ключи приложения</button>
-    <button class="tab" data-tab="metric">Метрики по ключу</button>
+    <button class="tab active" data-tab="kw">Ключи</button>
+    <button class="tab" data-tab="metric">Метрики</button>
+    <button class="tab" data-tab="hist">История</button>
   </div>
   <main>
     <div class="pane active" id="pane-kw">
       <div id="target" class="target" style="display:none"></div>
-      <button id="go" class="go">Подобрать ключи</button>
+      <div style="display:flex;gap:8px">
+        <button id="go" class="go" style="flex:1">Подобрать ключи</button>
+        <button id="recalcBtn" class="secbtn" title="Подобрать заново, игнорируя кэш">↻</button>
+      </div>
       <div id="result" class="result"></div>
     </div>
     <div class="pane" id="pane-metric">
       <input id="kwInput" placeholder="ключевое слово" />
       <button id="checkBtn" class="go">Проверить позицию</button>
       <div id="metricResult" class="result"></div>
+    </div>
+    <div class="pane" id="pane-hist">
+      <button id="histRefresh" class="secbtn" style="width:100%">↻ Обновить историю</button>
+      <div id="histResult" class="result"></div>
     </div>
   </main>
   <script src="popup.js"></script>

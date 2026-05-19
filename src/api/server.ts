@@ -210,12 +210,12 @@ app.get<{ Params: { id: string }; Querystring: { country?: string } }>(
 );
 
 // Подбор ключей по ссылке: запускает (или возвращает) фоновую задачу.
-app.get<{ Querystring: { url?: string } }>(
+app.get<{ Querystring: { url?: string; fresh?: string } }>(
   '/discover/by-url',
   async (req, reply) => {
     if (!req.query.url) return reply.code(400).send({ error: 'url required' });
     try {
-      return await startDiscoveryJob(req.query.url);
+      return await startDiscoveryJob(req.query.url, req.query.fresh === '1');
     } catch (e) {
       return reply.code(400).send({ error: e instanceof Error ? e.message : 'ошибка' });
     }
