@@ -150,10 +150,11 @@
 
   function renderResult(d) {
     const flag = FLAGS[d.country] || (d.country || '').toUpperCase();
-    const rows = (d.keywords || []).map((k) => `<tr>
+    // Показываем только ключи, по которым приложение реально ранжируется.
+    const ranked = (d.keywords || []).filter((k) => k.rank != null);
+    const rows = ranked.map((k) => `<tr>
       <td>${k.term}</td>
-      <td class="num ${k.rank ? (k.rank <= 10 ? 'rank-top' : '') : 'rank-none'}">
-        ${k.rank ? '#' + k.rank : '—'}</td>
+      <td class="num ${k.rank <= 10 ? 'rank-top' : ''}">#${k.rank}</td>
       <td class="num">${k.volume}</td>
       <td class="num">${k.difficulty}</td>
       <td class="num">${k.totalResults}</td>
@@ -161,12 +162,13 @@
     resultEl.innerHTML = `
       <div class="target">${platformIcon(d.platform)}
         <span>${flag}</span><b>${d.title}</b></div>
-      ${rows ? `<table>
+      ${rows ? `<p class="muted" style="margin:0 0 8px">${ranked.length} ключей с позицией</p>
+        <table>
         <tr><th>Ключ</th><th class="num">Поз.</th><th class="num">Объём</th>
           <th class="num">Сложн.</th><th class="num">Конк.</th></tr>${rows}</table>
         <p class="muted" style="margin-top:9px">Объём и сложность — приближённые оценки,
         не данные Apple Search Ads.</p>`
-        : '<p class="muted">Релевантные ключи не найдены.</p>'}`;
+        : '<p class="muted">Приложение не ранжируется ни по одному из найденных ключей.</p>'}`;
   }
 
   async function run() {
