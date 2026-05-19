@@ -257,6 +257,10 @@ async function runJob(
       });
     }
 
+    if (found.length === 0 && candidates.length > 0) {
+      throw new Error('Магазин ограничил запросы — не удалось получить выдачу. Попробуйте позже.');
+    }
+
     await updateDiscoveryJob(jobId, {
       status: 'done',
       processed: candidates.length,
