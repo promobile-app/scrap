@@ -75,6 +75,7 @@
         width: 420px; max-width: 100vw; height: 100vh;
         background: #0e0f15; color: #e9eaf2;
         box-shadow: -10px 0 40px rgba(0,0,0,.5);
+        border-radius: 22px 0 0 22px;
         display: flex; flex-direction: column;
         transform: translateX(100%); transition: transform .22s ease;
       }
@@ -84,60 +85,67 @@
         padding: 15px 16px; border-bottom: 1px solid #2b2d3a; flex: none;
       }
       .logo {
-        width: 28px; height: 28px; border-radius: 8px; flex: none;
+        width: 30px; height: 30px; border-radius: 11px; flex: none;
         background: linear-gradient(135deg, #5b5ef4, #8b5cf6);
         display: flex; align-items: center; justify-content: center;
       }
       .ttl { font-weight: 700; font-size: 14px; }
       .ttl span { color: #8b8dff; }
       .x {
-        margin-left: auto; cursor: pointer; border: 0; border-radius: 8px;
-        background: #1f2230; color: #9498a8; width: 30px; height: 30px;
+        margin-left: auto; cursor: pointer; border: 0; border-radius: 11px;
+        background: #1f2230; color: #9498a8; width: 32px; height: 32px;
         font-size: 16px; line-height: 1;
       }
       .x:hover { color: #e9eaf2; }
-      .tabs { display: flex; gap: 4px; padding: 10px 16px 0; flex: none; }
+      .tabs {
+        display: flex; gap: 6px; margin: 12px 16px 0; flex: none;
+        background: #1f2230; padding: 5px; border-radius: 14px;
+      }
       .tab {
         flex: 1; padding: 9px 8px; border: 0; cursor: pointer;
-        background: #1f2230; color: #9498a8; font-size: 12px; font-weight: 700;
-        border-radius: 9px 9px 0 0;
+        background: transparent; color: #9498a8; font-size: 12px; font-weight: 700;
+        border-radius: 10px; transition: background .15s, color .15s;
       }
       .tab.active { background: #181a23; color: #e9eaf2; }
       .body { padding: 14px 16px; overflow-y: auto; flex: 1; }
       .pane { display: none; }
       .pane.active { display: block; }
       input {
-        width: 100%; padding: 10px 12px; margin-bottom: 9px;
-        border: 1px solid #2b2d3a; border-radius: 9px; outline: none;
+        width: 100%; padding: 11px 14px; margin-bottom: 10px;
+        border: 1px solid #2b2d3a; border-radius: 13px; outline: none;
         background: #181a23; color: #e9eaf2; font-size: 13px;
       }
       input:focus { border-color: #5b5ef4; }
       .go {
-        width: 100%; padding: 11px 14px; border: 0; border-radius: 9px; cursor: pointer;
+        width: 100%; padding: 12px 16px; border: 0; border-radius: 15px; cursor: pointer;
         background: linear-gradient(135deg, #5b5ef4, #8b5cf6); color: #fff;
         font-size: 13px; font-weight: 700;
       }
       .go:disabled { opacity: .55; cursor: not-allowed; }
       .muted { color: #9498a8; font-size: 12px; }
       .target {
-        display: flex; align-items: center; gap: 7px; margin: 12px 0;
-        background: #1f2230; border: 1px solid #2b2d3a; border-radius: 9px; padding: 9px 11px;
+        display: flex; align-items: center; gap: 8px; margin: 13px 0;
+        background: #1f2230; border: 1px solid #2b2d3a; border-radius: 15px; padding: 11px 13px;
       }
       .target b { font-size: 13px; }
-      .mgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; }
+      .mgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 13px 0; }
       .mtile {
-        background: #1f2230; border: 1px solid #2b2d3a; border-radius: 10px;
-        padding: 11px 12px;
+        background: #1f2230; border: 1px solid #2b2d3a; border-radius: 18px;
+        padding: 14px 15px;
       }
       .mtile .mv { font-size: 22px; font-weight: 800; line-height: 1; }
-      .mtile .ml { font-size: 11px; color: #9498a8; margin-top: 5px; font-weight: 600; }
+      .mtile .ml { font-size: 11px; color: #9498a8; margin-top: 6px; font-weight: 600; }
+      .tw {
+        border: 1px solid #2b2d3a; border-radius: 16px;
+        overflow: hidden; margin-top: 12px;
+      }
       table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
       th {
-        text-align: left; padding: 7px 8px; color: #9498a8;
+        text-align: left; padding: 9px 11px; color: #9498a8;
         font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
-        border-bottom: 1px solid #2b2d3a; background: #1f2230; position: sticky; top: 0;
+        border-bottom: 1px solid #2b2d3a; background: #1f2230;
       }
-      td { padding: 7px 8px; border-bottom: 1px solid #2b2d3a; }
+      td { padding: 9px 11px; border-bottom: 1px solid #2b2d3a; }
       tr:last-child td { border-bottom: 0; }
       .num { text-align: right; font-variant-numeric: tabular-nums; }
       .rank-top { color: #22c55e; font-weight: 700; }
@@ -223,9 +231,9 @@
         <span>${flag}</span><b>${d.title}</b></div>
       ${rows ? `<p class="muted" style="margin:0 0 8px">${ranked.length} ключей с позицией
         · из ${(d.keywords || []).length} найденных</p>
-        <table>
+        <div class="tw"><table>
         <tr><th>Ключ</th><th class="num">Поз.</th><th class="num">Объём</th>
-          <th class="num">Сложн.</th><th class="num">Конк.</th></tr>${rows}</table>
+          <th class="num">Сложн.</th><th class="num">Конк.</th></tr>${rows}</table></div>
         <p class="muted" style="margin-top:9px">Объём и сложность — приближённые оценки,
         не данные Apple Search Ads.</p>`
         : '<p class="muted">Приложение не ранжируется ни по одному из найденных ключей.</p>'}`;
@@ -280,7 +288,8 @@
         <div class="mtile"><div class="mv">${d.totalResults ?? '—'}</div>
           <div class="ml">Конкурентов</div></div>
       </div>
-      ${top ? `<table><tr><th class="num">#</th><th>Топ выдачи по «${d.term}»</th></tr>${top}</table>` : ''}`;
+      ${top ? `<div class="tw"><table>
+        <tr><th class="num">#</th><th>Топ выдачи по «${d.term}»</th></tr>${top}</table></div>` : ''}`;
   }
 
   async function checkKeyword() {
