@@ -17,10 +17,48 @@ export interface UrlDiscoveryResult {
   title: string;
   country: string;
   keywords: UrlKeyword[];
+  cached?: boolean;
 }
 
 // Сколько ключей-кандидатов набираем и считаем максимум.
 const MAX_KEYWORDS = 150;
+// Время жизни кэша — выдача и метрики меняются медленно.
+const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+
+/** Простой in-memory кэш с TTL и ограничением размера. */
+class TtlCache<V> {
+  private store = new Map<string, { value: V; expires: number }>();
+  constructor(private ttlMs: number, private maxEntries = 4000) {}
+
+  get(key: string): V | undefined {
+    const e = this.store.get(key);
+    if (!e) return undefined;
+    if (Date.now() > e.expires) {
+      this.store.delete(key);
+      return undefined;
+    }
+    return e.value;
+  }
+
+  set(key: string, value: V): void {
+    if (this.store.size >= this.maxEntries) {
+      const oldest = this.store.keys().next().value;
+      if (oldest !== undefined) this.store.delete(oldest);
+    }
+    this.store.set(key, { value, expires: Date.now() + this.ttlMs });
+  }
+}
+
+// Кэш готового ответа по приложению и кэш данных по отдельным ключам
+// (выдача по ключу не зависит от приложения — переиспользуется между ними).
+const resultCache = new TtlCache<UrlDiscoveryResult>(CACHE_TTL_MS);
+interface KeywordData {
+  ids: string[]; // упорядоченные ID приложений в выдаче
+  totalResults: number;
+  volume: number;
+  difficulty: number;
+}
+const keywordCache = new TtlCache<KeywordData>(CACHE_TTL_MS);
 
 const STOP_WORDS = new Set([
   'the', 'and', 'for', 'app', 'with', 'your', 'free', 'pro', 'plus',
@@ -73,8 +111,7 @@ async function mapLimit<T, R>(
 
 /**
  * Генерация ключей-кандидатов: сиды из названия и жанра, затем
- * послойное расширение через autocomplete магазина (BFS), пока не
- * наберём нужное количество.
+ * послойное расширение через autocomplete магазина (BFS).
  */
 async function buildCandidates(
   title: string,
@@ -92,7 +129,6 @@ async function buildCandidates(
     candidates.add(`${titleWords[i]} ${titleWords[i + 1]}`);
   }
 
-  // Послойное расширение через autocomplete.
   let frontier = [...seeds];
   let depth = 0;
   while (candidates.size < maxCandidates && frontier.length > 0 && depth < 3) {
@@ -109,7 +145,6 @@ async function buildCandidates(
         }
       }
     }
-    // Ограничиваем ветвление, чтобы не разрастаться бесконтрольно.
     frontier = next.slice(0, 24);
     depth++;
   }
@@ -126,12 +161,33 @@ function sortKeywords(keywords: UrlKeyword[]): UrlKeyword[] {
   });
 }
 
+/** Данные по ключу для App Store (с кэшем — не зависят от приложения). */
+async function iosKeywordData(term: string, country: string): Promise<KeywordData> {
+  const key = `ios|${country}|${term}`;
+  const hit = keywordCache.get(key);
+  if (hit) return hit;
+  const ids = await nativeSearchIds(term, country);
+  const top = await lookupApps(ids.slice(0, 10), country);
+  const data: KeywordData = {
+    ids,
+    totalResults: ids.length,
+    volume: volumeFromResults(ids.length),
+    difficulty: difficultyFromRatings(top.map((a) => a.ratingCount)),
+  };
+  keywordCache.set(key, data);
+  return data;
+}
+
 /**
  * По ссылке на приложение в App Store / Google Play возвращает релевантные
  * ключевые слова с позицией, объёмом и сложностью (до ~150 ключей).
  */
 export async function discoverByUrl(rawUrl: string): Promise<UrlDiscoveryResult> {
   const { platform, appId, country } = parseStoreUrl(rawUrl);
+
+  const resultKey = `${platform}|${appId}|${country}`;
+  const cachedResult = resultCache.get(resultKey);
+  if (cachedResult) return { ...cachedResult, cached: true };
 
   // --- Google Play ---
   if (platform === 'android') {
@@ -140,36 +196,50 @@ export async function discoverByUrl(rawUrl: string): Promise<UrlDiscoveryResult>
 
     const candidates = await buildCandidates(app.title, app.genre, country, 'android');
 
-    // Кэш деталей приложений: топ-конкуренты повторяются между ключами.
-    const cache = new Map<string, GpAppInfo | null>();
+    // Кэш деталей приложений в пределах запроса.
+    const appCache = new Map<string, GpAppInfo | null>();
     const cachedLookup = async (id: string): Promise<GpAppInfo | null> => {
-      if (cache.has(id)) return cache.get(id) ?? null;
+      if (appCache.has(id)) return appCache.get(id) ?? null;
       const info = await gpAppLookup(id, country);
-      cache.set(id, info);
+      appCache.set(id, info);
       return info;
     };
 
-    const raw = await mapLimit(candidates, 3, async (term): Promise<UrlKeyword | null> => {
+    const raw = await mapLimit(candidates, 4, async (term): Promise<UrlKeyword | null> => {
       try {
-        const results = await gpSearch(term, country, 250);
-        const idx = results.findIndex((a) => a.appId === appId);
-        // Поиск Google Play не отдаёт число отзывов — подтягиваем детали топ-4.
-        const top = await Promise.all(
-          results.slice(0, 4).map((a) => cachedLookup(a.appId)),
-        );
+        const key = `android|${country}|${term}`;
+        let data = keywordCache.get(key);
+        if (!data) {
+          const results = await gpSearch(term, country, 250);
+          const top = await Promise.all(
+            results.slice(0, 4).map((a) => cachedLookup(a.appId)),
+          );
+          data = {
+            ids: results.map((a) => a.appId),
+            totalResults: results.length,
+            volume: volumeFromResults(results.length),
+            difficulty: difficultyFromRatings(top.map((a) => a?.ratings ?? 0)),
+          };
+          keywordCache.set(key, data);
+        }
+        const idx = data.ids.indexOf(appId);
         return {
           term,
           rank: idx === -1 ? null : idx + 1,
-          totalResults: results.length,
-          volume: volumeFromResults(results.length),
-          difficulty: difficultyFromRatings(top.map((a) => a?.ratings ?? 0)),
+          totalResults: data.totalResults,
+          volume: data.volume,
+          difficulty: data.difficulty,
         };
       } catch {
         return null;
       }
     });
     const keywords = raw.filter((k): k is UrlKeyword => k !== null);
-    return { platform, appId, title: app.title, country, keywords: sortKeywords(keywords) };
+    const result: UrlDiscoveryResult = {
+      platform, appId, title: app.title, country, keywords: sortKeywords(keywords),
+    };
+    resultCache.set(resultKey, result);
+    return result;
   }
 
   // --- App Store ---
@@ -177,22 +247,25 @@ export async function discoverByUrl(rawUrl: string): Promise<UrlDiscoveryResult>
   if (!app) throw new Error('Приложение не найдено в App Store для этого гео');
 
   const candidates = await buildCandidates(app.title, app.primaryGenre, country, 'ios');
-  const raw = await mapLimit(candidates, 5, async (term): Promise<UrlKeyword | null> => {
+  const raw = await mapLimit(candidates, 8, async (term): Promise<UrlKeyword | null> => {
     try {
-      const ids = await nativeSearchIds(term, country);
-      const idx = ids.indexOf(appId);
-      const top = await lookupApps(ids.slice(0, 10), country);
+      const data = await iosKeywordData(term, country);
+      const idx = data.ids.indexOf(appId);
       return {
         term,
         rank: idx === -1 ? null : idx + 1,
-        totalResults: ids.length,
-        volume: volumeFromResults(ids.length),
-        difficulty: difficultyFromRatings(top.map((a) => a.ratingCount)),
+        totalResults: data.totalResults,
+        volume: data.volume,
+        difficulty: data.difficulty,
       };
     } catch {
       return null;
     }
   });
   const keywords = raw.filter((k): k is UrlKeyword => k !== null);
-  return { platform, appId, title: app.title, country, keywords: sortKeywords(keywords) };
+  const result: UrlDiscoveryResult = {
+    platform, appId, title: app.title, country, keywords: sortKeywords(keywords),
+  };
+  resultCache.set(resultKey, result);
+  return result;
 }
