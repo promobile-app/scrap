@@ -144,20 +144,24 @@ function renderKeywords(d) {
     <span>${FLAGS[d.country] || (d.country || '').toUpperCase()}</span>
     <b>${d.appTitle || d.appId}</b>`;
   const ranked = (d.keywords || []).filter((k) => k.rank != null);
-  const running = d.status === 'pending' || d.status === 'running';
-  const head = running
-    ? `<p class="muted" style="margin:8px 0"><span class="spinner"></span>идёт подбор:
-       ${d.processed} / ${d.total || '…'} — заполняется на ходу</p>`
-    : `<p class="muted" style="margin:8px 0">${ranked.length} ключей с позицией
-       · из ${(d.keywords || []).length} найденных</p>`;
+  const queued = d.status === 'pending';
+  const running = d.status === 'running';
+  const active = queued || running;
+  const head = queued
+    ? `<p class="muted" style="margin:8px 0"><span class="spinner"></span>в очереди — ждём свободный слот…</p>`
+    : running
+      ? `<p class="muted" style="margin:8px 0"><span class="spinner"></span>идёт подбор:
+         ${d.processed} / ${d.total || '…'} — заполняется на ходу</p>`
+      : `<p class="muted" style="margin:8px 0">${ranked.length} ключей с позицией
+         · из ${(d.keywords || []).length} найденных</p>`;
   if (!ranked.length) {
-    resultEl.innerHTML = head + (running ? '' :
+    resultEl.innerHTML = head + (active ? '' :
       '<p class="muted">Приложение не ранжируется ни по одному из найденных ключей.</p>');
     return;
   }
   const sBtn = 'padding:8px 12px;border-radius:11px;background:var(--surface-2);'
     + 'color:var(--ink);border:1px solid var(--line);font-weight:700;font-size:12px;cursor:pointer';
-  const exportRow = running ? '' : `<div style="display:flex;gap:8px;margin:10px 0 2px">
+  const exportRow = active ? '' : `<div style="display:flex;gap:8px;margin:10px 0 2px">
     <button style="${sBtn}" onclick="exportCsv('${API}/discover/job/${d.jobId}/export.csv','keywords-${d.appId}.csv')">⬇ Экспорт CSV</button>
     <button style="${sBtn}" onclick="exportCsv('${API}/discover/export.csv','all-keywords.csv')">Все приложения</button>
   </div>`;

@@ -109,3 +109,19 @@ CREATE TABLE IF NOT EXISTS discovery_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_discovery_jobs_key
   ON discovery_jobs (job_key, created_at DESC);
+
+-- Кэш выдачи магазина по ключу (не зависит от приложения).
+-- Переживает рестарты сервиса и шарится между всеми задачами.
+CREATE TABLE IF NOT EXISTS keyword_cache (
+  platform      TEXT NOT NULL,
+  country       TEXT NOT NULL,
+  term          TEXT NOT NULL,
+  ids           JSONB NOT NULL,
+  total_results INTEGER NOT NULL,
+  volume        INTEGER NOT NULL,
+  difficulty    INTEGER NOT NULL,
+  captured_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (platform, country, term)
+);
+CREATE INDEX IF NOT EXISTS idx_keyword_cache_time
+  ON keyword_cache (captured_at);

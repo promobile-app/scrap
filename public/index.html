@@ -668,14 +668,16 @@
     function renderUrlJob(d) {
       const el = document.getElementById('urlResult');
       const ranked = (d.keywords || []).filter(k => k.rank != null);
-      const running = d.status === 'pending' || d.status === 'running';
-      const head = running
-        ? `<p class="muted" style="margin:10px 0 2px">${platformIcon(d.platform)}
-            ${FLAGS[d.country] || (d.country || '').toUpperCase()} · <b>${d.appTitle || d.appId}</b>
-            · идёт подбор: ${d.processed} / ${d.total || '…'} ключей…</p>`
-        : `<p class="muted" style="margin:10px 0 2px">${platformIcon(d.platform)}
-            ${FLAGS[d.country] || (d.country || '').toUpperCase()} · <b>${d.appTitle || d.appId}</b>
-            · ${ranked.length} ключей с позицией из ${(d.keywords || []).length} найденных</p>`;
+      const queued = d.status === 'pending';
+      const running = d.status === 'running' || queued;
+      const status = queued
+        ? '· в очереди — ждём свободный слот…'
+        : d.status === 'running'
+          ? `· идёт подбор: ${d.processed} / ${d.total || '…'} ключей…`
+          : `· ${ranked.length} ключей с позицией из ${(d.keywords || []).length} найденных`;
+      const head = `<p class="muted" style="margin:10px 0 2px">${platformIcon(d.platform)}
+        ${FLAGS[d.country] || (d.country || '').toUpperCase()} · <b>${d.appTitle || d.appId}</b>
+        ${status}</p>`;
       if (!ranked.length) {
         el.innerHTML = head + (running ? ''
           : '<p class="muted">Приложение не ранжируется ни по одному из найденных ключей.</p>');
