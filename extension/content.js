@@ -314,12 +314,15 @@
   function renderKeywords(d) {
     const flag = FLAGS[d.country] || (d.country || '').toUpperCase();
     const ranked = (d.keywords || []).filter((k) => k.rank != null);
-    const running = d.status === 'pending' || d.status === 'running';
-    const progress = running
-      ? `<p class="muted" style="margin:0 0 8px"><span class="spinner"></span>идёт подбор:
-         ${d.processed} / ${d.total || '…'} ключей — можно не ждать, заполняется на ходу</p>`
-      : `<p class="muted" style="margin:0 0 8px">${ranked.length} ключей с позицией
-         · из ${(d.keywords || []).length} найденных</p>`;
+    const queued = d.status === 'pending';
+    const running = d.status === 'running' || queued;
+    const progress = queued
+      ? `<p class="muted" style="margin:0 0 8px"><span class="spinner"></span>в очереди — ждём свободный слот…</p>`
+      : d.status === 'running'
+        ? `<p class="muted" style="margin:0 0 8px"><span class="spinner"></span>идёт подбор:
+           ${d.processed} / ${d.total || '…'} ключей — можно не ждать, заполняется на ходу</p>`
+        : `<p class="muted" style="margin:0 0 8px">${ranked.length} ключей с позицией
+           · из ${(d.keywords || []).length} найденных</p>`;
     const rows = ranked.map((k) => `<tr>
       <td>${k.term}</td>
       <td class="num ${k.rank <= 10 ? 'rank-top' : ''}">#${k.rank}</td>

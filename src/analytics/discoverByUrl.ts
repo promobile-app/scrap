@@ -4,8 +4,28 @@ import { gpAppLookup, gpSearch, gpSuggest, type GpAppInfo } from '../scrapers/go
 import { parseStoreUrl } from '../scrapers/storeUrl.js';
 import {
   createDiscoveryJob, getDiscoveryJob, latestDiscoveryJob, updateDiscoveryJob,
+  getCachedKeyword, upsertCachedKeyword,
   type DiscoveryJobRow,
 } from '../db/repo.js';
+
+// --- Очередь подборов: лимит параллельных задач --------------------------
+const MAX_CONCURRENT_JOBS = Number(process.env.MAX_CONCURRENT_JOBS ?? 4);
+let activeJobs = 0;
+const waitingJobs: Array<() => void> = [];
+
+function acquireSlot(): Promise<void> {
+  if (activeJobs < MAX_CONCURRENT_JOBS) {
+    activeJobs++;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => waitingJobs.push(resolve));
+}
+
+function releaseSlot(): void {
+  const next = waitingJobs.shift();
+  if (next) next();
+  else activeJobs--;
+}
 
 export interface UrlKeyword {
   term: string;
@@ -35,6 +55,8 @@ const MAX_KEYWORDS = 1000;
 const DONE_TTL_MS = 6 * 60 * 60 * 1000;
 // Задача без прогресса дольше 3 минут считается «зависшей».
 const STALE_MS = 3 * 60 * 1000;
+// Сколько максимум держим задачу в очереди (pending) до новой попытки.
+const QUEUE_MS = 30 * 60 * 1000;
 // Время жизни кэша выдачи по ключу.
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
@@ -148,20 +170,40 @@ function sortKeywords(keywords: UrlKeyword[]): UrlKeyword[] {
   });
 }
 
+/**
+ * Кэшированный доступ к данным по ключу: память → БД → парсинг магазина.
+ * БД-кэш переживает рестарты и шарится между всеми задачами.
+ */
+async function cachedKeyword(
+  platform: 'ios' | 'android', country: string, term: string,
+  fetcher: () => Promise<KeywordData>,
+): Promise<KeywordData> {
+  const key = `${platform}|${country}|${term}`;
+  const mem = keywordCache.get(key);
+  if (mem) return mem;
+  try {
+    const db = await getCachedKeyword(platform, country, term);
+    if (db) { keywordCache.set(key, db); return db; }
+  } catch {
+    // ошибки БД-кэша не должны валить подбор
+  }
+  const fresh = await fetcher();
+  keywordCache.set(key, fresh);
+  upsertCachedKeyword(platform, country, term, fresh).catch(() => {});
+  return fresh;
+}
+
 async function iosKeywordData(term: string, country: string): Promise<KeywordData> {
-  const key = `ios|${country}|${term}`;
-  const hit = keywordCache.get(key);
-  if (hit) return hit;
-  const ids = await nativeSearchIds(term, country);
-  const top = await lookupApps(ids.slice(0, 10), country);
-  const data: KeywordData = {
-    ids,
-    totalResults: ids.length,
-    volume: volumeFromResults(ids.length),
-    difficulty: difficultyFromRatings(top.map((a) => a.ratingCount)),
-  };
-  keywordCache.set(key, data);
-  return data;
+  return cachedKeyword('ios', country, term, async () => {
+    const ids = await nativeSearchIds(term, country);
+    const top = await lookupApps(ids.slice(0, 10), country);
+    return {
+      ids,
+      totalResults: ids.length,
+      volume: volumeFromResults(ids.length),
+      difficulty: difficultyFromRatings(top.map((a) => a.ratingCount)),
+    };
+  });
 }
 
 function rowToState(row: DiscoveryJobRow): DiscoveryJobState {
@@ -176,6 +218,18 @@ function rowToState(row: DiscoveryJobRow): DiscoveryJobState {
     country: row.country,
     keywords: (row.keywords as UrlKeyword[]) ?? [],
   };
+}
+
+/** Обёртка с ограничением параллельности (очередь). */
+async function runJobQueued(
+  jobId: number, platform: 'ios' | 'android', appId: string, country: string,
+): Promise<void> {
+  await acquireSlot();
+  try {
+    await runJob(jobId, platform, appId, country);
+  } finally {
+    releaseSlot();
+  }
 }
 
 /** Фоновая обработка: набирает кандидатов и считает метрики, обновляя БД. */
@@ -212,21 +266,18 @@ async function runJob(
     async function processKeyword(term: string): Promise<UrlKeyword | null> {
       try {
         if (platform === 'android') {
-          const key = `android|${country}|${term}`;
-          let data = keywordCache.get(key);
-          if (!data) {
+          const data = await cachedKeyword('android', country, term, async () => {
             const results = await gpSearch(term, country, 250);
             const top = await Promise.all(
               results.slice(0, 4).map((a) => cachedLookup(a.appId)),
             );
-            data = {
+            return {
               ids: results.map((a) => a.appId),
               totalResults: results.length,
               volume: volumeFromResults(results.length),
               difficulty: difficultyFromRatings(top.map((a) => a?.ratings ?? 0)),
             };
-            keywordCache.set(key, data);
-          }
+          });
           const idx = data.ids.indexOf(appId);
           return {
             term, rank: idx === -1 ? null : idx + 1,
@@ -290,14 +341,18 @@ export async function startDiscoveryJob(
     if (!force && existing.status === 'done' && age < DONE_TTL_MS) {
       return { ...rowToState(existing), cached: true };
     }
-    if ((existing.status === 'running' || existing.status === 'pending') && age < STALE_MS) {
+    if (existing.status === 'running' && age < STALE_MS) {
+      return rowToState(existing);
+    }
+    if (existing.status === 'pending' && age < QUEUE_MS) {
+      // Уже стоит в очереди — не плодим дубликат.
       return rowToState(existing);
     }
   }
 
   const job = await createDiscoveryJob(jobKey, platform, appId, country);
-  // Запускаем обработку в фоне — ответ возвращаем сразу.
-  void runJob(job.id, platform, appId, country);
+  // Ставим в очередь — выполнится, когда освободится слот.
+  void runJobQueued(job.id, platform, appId, country);
   return rowToState(job);
 }
 

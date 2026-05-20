@@ -255,3 +255,44 @@ export async function allDoneDiscoveryJobs(): Promise<DiscoveryJobRow[]> {
      ORDER BY job_key, created_at DESC`,
   );
 }
+
+// --- Кэш выдачи по ключу (общий для всех задач, переживает рестарт) ----
+
+export interface KeywordCacheRow {
+  ids: string[];
+  totalResults: number;
+  volume: number;
+  difficulty: number;
+}
+
+/** Свежая (моложе ttl часов) запись кэша или null. */
+export async function getCachedKeyword(
+  platform: string, country: string, term: string, ttlHours = 6,
+): Promise<KeywordCacheRow | null> {
+  const rows = await query<KeywordCacheRow>(
+    `SELECT ids, total_results AS "totalResults", volume, difficulty
+     FROM keyword_cache
+     WHERE platform = $1 AND country = $2 AND term = $3
+       AND captured_at > now() - ($4 || ' hours')::interval`,
+    [platform, country, term, String(ttlHours)],
+  );
+  return rows[0] ?? null;
+}
+
+export async function upsertCachedKeyword(
+  platform: string, country: string, term: string, data: KeywordCacheRow,
+): Promise<void> {
+  await query(
+    `INSERT INTO keyword_cache
+       (platform, country, term, ids, total_results, volume, difficulty, captured_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+     ON CONFLICT (platform, country, term) DO UPDATE SET
+       ids = EXCLUDED.ids,
+       total_results = EXCLUDED.total_results,
+       volume = EXCLUDED.volume,
+       difficulty = EXCLUDED.difficulty,
+       captured_at = now()`,
+    [platform, country, term, JSON.stringify(data.ids),
+     data.totalResults, data.volume, data.difficulty],
+  );
+}
