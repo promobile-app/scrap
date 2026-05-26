@@ -311,14 +311,25 @@ function rowToState(row: DiscoveryJobRow): DiscoveryJobState {
   };
 }
 
+// Регистр активных задач, чтобы поддерживать отмену по force-restart.
+const cancelledJobs = new Set<number>();
+function cancelJob(id: number): void {
+  cancelledJobs.add(id);
+}
+function isCancelled(id: number): boolean {
+  return cancelledJobs.has(id);
+}
+
 /** Обёртка с ограничением параллельности (очередь). */
 async function runJobQueued(
   jobId: number, platform: 'ios' | 'android', appId: string, country: string,
 ): Promise<void> {
   await acquireSlot();
   try {
+    if (isCancelled(jobId)) return;
     await runJob(jobId, platform, appId, country);
   } finally {
+    cancelledJobs.delete(jobId);
     releaseSlot();
   }
 }
@@ -419,6 +430,15 @@ async function runJob(
     const chunk = 24;
     const conc = platform === 'android' ? 4 : 8;
     for (let i = 0; i < candidates.length; i += chunk) {
+      if (isCancelled(jobId)) {
+        // Помечаем как error чтобы фронт мог двинуться дальше; новая задача
+        // уже создана в startDiscoveryJob и продолжит работу.
+        await updateDiscoveryJob(jobId, {
+          status: 'error',
+          error: 'cancelled by recalculate',
+        }).catch(() => {});
+        return;
+      }
       const slice = candidates.slice(i, i + chunk);
       const part = await mapLimit(slice, conc, processKeyword);
       for (const k of part) if (k) found.push(k);
@@ -462,9 +482,14 @@ export async function startDiscoveryJob(
       return { ...rowToState(existing), cached: true };
     }
     if (existing.status === 'running' && age < STALE_MS) {
-      return rowToState(existing);
+      if (force) {
+        // Отменяем текущую задачу и запускаем новую с свежими настройками.
+        cancelJob(existing.id);
+      } else {
+        return rowToState(existing);
+      }
     }
-    if (existing.status === 'pending' && age < QUEUE_MS) {
+    if (!force && existing.status === 'pending' && age < QUEUE_MS) {
       // Уже стоит в очереди — не плодим дубликат.
       return rowToState(existing);
     }
