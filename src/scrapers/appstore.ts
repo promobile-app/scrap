@@ -21,6 +21,8 @@ export interface AppInfo {
   primaryGenreId: number;
   icon: string;
   url: string;
+  description: string;
+  genres: string[];
 }
 
 interface ItunesResult {
@@ -38,6 +40,8 @@ interface ItunesResult {
   artworkUrl512?: string;
   artworkUrl100?: string;
   trackViewUrl: string;
+  description?: string;
+  genres?: string[];
 }
 
 function mapApp(r: ItunesResult): AppInfo {
@@ -55,6 +59,8 @@ function mapApp(r: ItunesResult): AppInfo {
     primaryGenreId: r.primaryGenreId,
     icon: r.artworkUrl512 ?? r.artworkUrl100 ?? '',
     url: r.trackViewUrl,
+    description: r.description ?? '',
+    genres: r.genres ?? [],
   };
 }
 

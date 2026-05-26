@@ -18,6 +18,8 @@ export interface GpAppInfo {
   icon: string;
   url: string;
   free: boolean;
+  description: string;
+  summary: string;
 }
 
 // Язык витрины по стране (Play Store учитывает lang при ранжировании).
@@ -41,6 +43,8 @@ interface GpRaw {
   icon?: string;
   url?: string;
   free?: boolean;
+  description?: string;
+  summary?: string;
 }
 
 function mapApp(r: GpRaw): GpAppInfo {
@@ -55,6 +59,8 @@ function mapApp(r: GpRaw): GpAppInfo {
     icon: r.icon ?? '',
     url: r.url ?? '',
     free: r.free ?? true,
+    description: r.description ?? '',
+    summary: r.summary ?? '',
   };
 }
 
