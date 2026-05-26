@@ -153,7 +153,10 @@ async function mapLimit<T, R>(
 /**
  * Генерация ключей-кандидатов:
  *   1) seeds = слова из title + description + genre + bigrams + competitor titles
- *   2) BFS расширение через autocomplete, большая фронтира и больше уровней.
+ *   2) BFS расширение через autocomplete — небольшая глубина, чтобы
+ *      подсказки не «уплывали» в нерелевантную тематику.
+ *   3) фильтр релевантности: оставляем кейворд только если у него есть
+ *      пересечение токенов с пулом релевантных слов (title+desc+competitors).
  */
 async function buildCandidates(
   title: string,
@@ -162,35 +165,48 @@ async function buildCandidates(
   platform: 'ios' | 'android',
   description = '',
   competitorTitles: string[] = [],
-): Promise<string[]> {
+): Promise<{ candidates: string[]; relevantTokens: Set<string> }> {
   const suggestFn = platform === 'android' ? gpSuggest : suggest;
 
   const titleWords = words(title);
-  const descWords = topWords(description, 80);
+  const descWords = topWords(description, 60);
   const genreWords = words(genre);
   const compWords = topWords(competitorTitles.join(' '), 40);
 
-  const seedSet = new Set<string>([
+  // Пул «своих» токенов — по нему фильтруем подсказки из autocomplete,
+  // чтобы не утащить нерелевантные ветки (bank → account → login → ...).
+  const relevantTokens = new Set<string>([
     ...titleWords,
     ...descWords,
     ...genreWords,
     ...compWords,
+  ]);
+
+  const seedSet = new Set<string>([
+    ...titleWords,
+    ...descWords.slice(0, 40),
+    ...genreWords,
+    ...compWords,
     genre.toLowerCase(),
   ].filter((w) => w && w.length >= 3));
-  // Bigrams из заголовка и описания — даём «составным» ключам тоже шанс.
   for (const bg of bigrams(titleWords)) seedSet.add(bg);
-  for (const bg of bigrams(descWords.slice(0, 30))) seedSet.add(bg);
-  for (const t of competitorTitles) {
+  for (const bg of bigrams(descWords.slice(0, 20))) seedSet.add(bg);
+  for (const t of competitorTitles.slice(0, 8)) {
     for (const bg of bigrams(words(t))) seedSet.add(bg);
   }
 
-  const seeds = [...seedSet].slice(0, 60);
+  const seeds = [...seedSet].slice(0, 50);
   const candidates = new Set<string>(seeds);
+
+  const isRelevant = (term: string): boolean => {
+    const toks = term.toLowerCase().split(/\s+/);
+    return toks.some((t) => relevantTokens.has(t));
+  };
 
   let frontier = [...seeds];
   let depth = 0;
-  const MAX_DEPTH = 8;
-  const FRONTIER_LIMIT = 240;
+  const MAX_DEPTH = 3;
+  const FRONTIER_LIMIT = 100;
 
   while (candidates.size < MAX_KEYWORDS && frontier.length > 0 && depth < MAX_DEPTH) {
     const hintLists = await mapLimit(frontier, 8, (term) =>
@@ -200,18 +216,22 @@ async function buildCandidates(
     for (const hints of hintLists) {
       for (const h of hints) {
         const hl = h.toLowerCase().trim();
-        if (hl.length >= 3 && hl.length <= 60 && !candidates.has(hl)) {
-          candidates.add(hl);
-          next.push(hl);
-          if (candidates.size >= MAX_KEYWORDS) break;
-        }
+        if (hl.length < 3 || hl.length > 60) continue;
+        if (candidates.has(hl)) continue;
+        if (!isRelevant(hl)) continue;
+        candidates.add(hl);
+        next.push(hl);
+        if (candidates.size >= MAX_KEYWORDS) break;
       }
       if (candidates.size >= MAX_KEYWORDS) break;
     }
     frontier = next.slice(0, FRONTIER_LIMIT);
     depth++;
   }
-  return [...candidates].filter((c) => c.length >= 3).slice(0, MAX_KEYWORDS);
+  return {
+    candidates: [...candidates].filter((c) => c.length >= 3).slice(0, MAX_KEYWORDS),
+    relevantTokens,
+  };
 }
 
 function sortKeywords(keywords: UrlKeyword[]): UrlKeyword[] {
@@ -219,6 +239,25 @@ function sortKeywords(keywords: UrlKeyword[]): UrlKeyword[] {
     if ((a.rank === null) !== (b.rank === null)) return a.rank === null ? 1 : -1;
     if (a.rank !== null && b.rank !== null && a.rank !== b.rank) return a.rank - b.rank;
     return b.volume - a.volume;
+  });
+}
+
+/**
+ * Финальный фильтр: оставляем кейворды, в которых есть реальный сигнал
+ * (приложение в выдаче или ключ имеет заметный объём поиска).
+ * Шум типа «term=abc, rank=null, volume=5» отсеиваем — он только захламляет UI.
+ */
+function filterSignal(keywords: UrlKeyword[], relevantTokens: Set<string>): UrlKeyword[] {
+  const MIN_VOLUME_WITHOUT_RANK = 30;
+  return keywords.filter((k) => {
+    if (k.rank !== null) return true;
+    if (k.volume >= MIN_VOLUME_WITHOUT_RANK) {
+      // Дополнительно требуем пересечения с пулом релевантных токенов —
+      // чтобы «трендовые, но не наши» подсказки не пролезали.
+      const toks = k.term.toLowerCase().split(/\s+/);
+      return toks.some((t) => relevantTokens.has(t));
+    }
+    return false;
   });
 }
 
@@ -293,23 +332,24 @@ async function runJob(
 
     let title = appId;
     let candidates: string[];
+    let relevantTokens: Set<string> = new Set();
     const appCache = new Map<string, GpAppInfo | null>();
 
     if (platform === 'android') {
       const app = await gpAppLookup(appId, country);
       if (!app) throw new Error('Приложение не найдено в Google Play для этого гео');
       title = app.title;
-      // Один поиск по названию + жанру даёт нам реальных конкурентов, чьи
-      // тайтлы — отличный источник дополнительных сидов.
       const competitors = await gpSearch(app.title, country, 20).catch(() => []);
       const competitorTitles = competitors
         .filter((c) => c.appId !== appId)
-        .slice(0, 15)
+        .slice(0, 10)
         .map((c) => c.title);
       const desc = `${app.summary} ${app.description}`.trim();
-      candidates = await buildCandidates(
+      const built = await buildCandidates(
         app.title, app.genre, country, 'android', desc, competitorTitles,
       );
+      candidates = built.candidates;
+      relevantTokens = built.relevantTokens;
     } else {
       const app = await appLookup(Number(appId), country);
       if (!app) throw new Error('Приложение не найдено в App Store для этого гео');
@@ -317,13 +357,13 @@ async function runJob(
       const competitorIds = await nativeSearchIds(app.title, country).catch(() => []);
       const competitors = competitorIds.length
         ? await lookupApps(
-            competitorIds.filter((id) => id !== String(appId)).slice(0, 15),
+            competitorIds.filter((id) => id !== String(appId)).slice(0, 10),
             country,
           ).catch(() => [])
         : [];
       const competitorTitles = competitors.map((c) => c.title);
       const genres = (app.genres ?? []).join(' ');
-      candidates = await buildCandidates(
+      const built = await buildCandidates(
         app.title,
         `${app.primaryGenre} ${genres}`,
         country,
@@ -331,6 +371,8 @@ async function runJob(
         app.description,
         competitorTitles,
       );
+      candidates = built.candidates;
+      relevantTokens = built.relevantTokens;
     }
     await updateDiscoveryJob(jobId, { appTitle: title, total: candidates.length });
 
@@ -382,7 +424,7 @@ async function runJob(
       for (const k of part) if (k) found.push(k);
       await updateDiscoveryJob(jobId, {
         processed: Math.min(i + chunk, candidates.length),
-        keywords: sortKeywords([...found]),
+        keywords: sortKeywords(filterSignal([...found], relevantTokens)),
       });
     }
 
@@ -393,7 +435,7 @@ async function runJob(
     await updateDiscoveryJob(jobId, {
       status: 'done',
       processed: candidates.length,
-      keywords: sortKeywords([...found]),
+      keywords: sortKeywords(filterSignal([...found], relevantTokens)),
     });
   } catch (e) {
     await updateDiscoveryJob(jobId, {
