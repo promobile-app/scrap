@@ -87,16 +87,39 @@ interface KeywordData {
 const keywordCache = new TtlCache<KeywordData>(CACHE_TTL_MS);
 
 const STOP_WORDS = new Set([
-  'the', 'and', 'for', 'app', 'with', 'your', 'free', 'pro', 'plus',
-  'a', 'an', 'to', 'of', 'on', 'in', '&', '-', 'by',
+  'the', 'and', 'for', 'app', 'apps', 'with', 'your', 'free', 'pro', 'plus',
+  'a', 'an', 'to', 'of', 'on', 'in', '&', '-', 'by', 'is', 'it', 'as', 'or',
+  'this', 'that', 'you', 'are', 'our', 'all', 'new', 'get', 'use', 'can',
+  'has', 'have', 'from', 'about', 'also', 'they', 'them', 'their', 'will',
+  'more', 'one', 'two', 'any', 'now', 'best', 'top', 'easy', 'simple',
 ]);
 
 function words(s: string): string[] {
   return s
     .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .split(/\s+/)
-    .filter((w) => w.length >= 3 && !STOP_WORDS.has(w));
+    .filter((w) => w.length >= 3 && w.length <= 24 && !STOP_WORDS.has(w));
+}
+
+function topWords(s: string, max = 60): string[] {
+  const freq = new Map<string, number>();
+  for (const w of words(s)) {
+    freq.set(w, (freq.get(w) ?? 0) + 1);
+  }
+  return [...freq.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, max)
+    .map(([w]) => w);
+}
+
+function bigrams(input: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < input.length - 1; i++) {
+    const pair = `${input[i]} ${input[i + 1]}`;
+    if (pair.length <= 40) out.push(pair);
+  }
+  return out;
 }
 
 function volumeFromResults(total: number): number {
@@ -127,36 +150,65 @@ async function mapLimit<T, R>(
   return out;
 }
 
-/** Генерация ключей-кандидатов: послойное расширение через autocomplete (BFS). */
+/**
+ * Генерация ключей-кандидатов:
+ *   1) seeds = слова из title + description + genre + bigrams + competitor titles
+ *   2) BFS расширение через autocomplete, большая фронтира и больше уровней.
+ */
 async function buildCandidates(
-  title: string, genre: string, country: string, platform: 'ios' | 'android',
+  title: string,
+  genre: string,
+  country: string,
+  platform: 'ios' | 'android',
+  description = '',
+  competitorTitles: string[] = [],
 ): Promise<string[]> {
   const suggestFn = platform === 'android' ? gpSuggest : suggest;
-  const seeds = [...new Set([...words(title), ...words(genre)])].slice(0, 10);
-  const candidates = new Set<string>([...seeds, genre.toLowerCase()]);
 
   const titleWords = words(title);
-  for (let i = 0; i < titleWords.length - 1; i++) {
-    candidates.add(`${titleWords[i]} ${titleWords[i + 1]}`);
+  const descWords = topWords(description, 80);
+  const genreWords = words(genre);
+  const compWords = topWords(competitorTitles.join(' '), 40);
+
+  const seedSet = new Set<string>([
+    ...titleWords,
+    ...descWords,
+    ...genreWords,
+    ...compWords,
+    genre.toLowerCase(),
+  ].filter((w) => w && w.length >= 3));
+  // Bigrams из заголовка и описания — даём «составным» ключам тоже шанс.
+  for (const bg of bigrams(titleWords)) seedSet.add(bg);
+  for (const bg of bigrams(descWords.slice(0, 30))) seedSet.add(bg);
+  for (const t of competitorTitles) {
+    for (const bg of bigrams(words(t))) seedSet.add(bg);
   }
+
+  const seeds = [...seedSet].slice(0, 60);
+  const candidates = new Set<string>(seeds);
 
   let frontier = [...seeds];
   let depth = 0;
-  while (candidates.size < MAX_KEYWORDS && frontier.length > 0 && depth < 6) {
-    const hintLists = await mapLimit(frontier, 6, (term) =>
+  const MAX_DEPTH = 8;
+  const FRONTIER_LIMIT = 240;
+
+  while (candidates.size < MAX_KEYWORDS && frontier.length > 0 && depth < MAX_DEPTH) {
+    const hintLists = await mapLimit(frontier, 8, (term) =>
       suggestFn(term, country).catch(() => [] as string[]),
     );
     const next: string[] = [];
     for (const hints of hintLists) {
       for (const h of hints) {
         const hl = h.toLowerCase().trim();
-        if (hl.length >= 3 && !candidates.has(hl)) {
+        if (hl.length >= 3 && hl.length <= 60 && !candidates.has(hl)) {
           candidates.add(hl);
           next.push(hl);
+          if (candidates.size >= MAX_KEYWORDS) break;
         }
       }
+      if (candidates.size >= MAX_KEYWORDS) break;
     }
-    frontier = next.slice(0, 80);
+    frontier = next.slice(0, FRONTIER_LIMIT);
     depth++;
   }
   return [...candidates].filter((c) => c.length >= 3).slice(0, MAX_KEYWORDS);
@@ -247,12 +299,38 @@ async function runJob(
       const app = await gpAppLookup(appId, country);
       if (!app) throw new Error('Приложение не найдено в Google Play для этого гео');
       title = app.title;
-      candidates = await buildCandidates(app.title, app.genre, country, 'android');
+      // Один поиск по названию + жанру даёт нам реальных конкурентов, чьи
+      // тайтлы — отличный источник дополнительных сидов.
+      const competitors = await gpSearch(app.title, country, 20).catch(() => []);
+      const competitorTitles = competitors
+        .filter((c) => c.appId !== appId)
+        .slice(0, 15)
+        .map((c) => c.title);
+      const desc = `${app.summary} ${app.description}`.trim();
+      candidates = await buildCandidates(
+        app.title, app.genre, country, 'android', desc, competitorTitles,
+      );
     } else {
       const app = await appLookup(Number(appId), country);
       if (!app) throw new Error('Приложение не найдено в App Store для этого гео');
       title = app.title;
-      candidates = await buildCandidates(app.title, app.primaryGenre, country, 'ios');
+      const competitorIds = await nativeSearchIds(app.title, country).catch(() => []);
+      const competitors = competitorIds.length
+        ? await lookupApps(
+            competitorIds.filter((id) => id !== String(appId)).slice(0, 15),
+            country,
+          ).catch(() => [])
+        : [];
+      const competitorTitles = competitors.map((c) => c.title);
+      const genres = (app.genres ?? []).join(' ');
+      candidates = await buildCandidates(
+        app.title,
+        `${app.primaryGenre} ${genres}`,
+        country,
+        'ios',
+        app.description,
+        competitorTitles,
+      );
     }
     await updateDiscoveryJob(jobId, { appTitle: title, total: candidates.length });
 
