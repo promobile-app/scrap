@@ -6,6 +6,9 @@ export const config = {
   defaultCountry: process.env.DEFAULT_COUNTRY ?? 'us',
   scrapeDelayMs: Number(process.env.SCRAPE_DELAY_MS ?? 600),
   scrapeMaxRetries: Number(process.env.SCRAPE_MAX_RETRIES ?? 3),
+  jwtSecret: process.env.JWT_SECRET ?? 'dev-insecure-change-me',
+  reportPriceCents: Number(process.env.REPORT_PRICE_CENTS ?? 499),
+  reportCurrency: process.env.REPORT_CURRENCY ?? 'USD',
   asa: {
     clientId: process.env.ASA_CLIENT_ID ?? '',
     teamId: process.env.ASA_TEAM_ID ?? '',

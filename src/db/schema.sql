@@ -125,3 +125,42 @@ CREATE TABLE IF NOT EXISTS keyword_cache (
 );
 CREATE INDEX IF NOT EXISTS idx_keyword_cache_time
   ON keyword_cache (captured_at);
+
+-- Пользователи extension (email+password).
+CREATE TABLE IF NOT EXISTS users (
+  id            BIGSERIAL PRIMARY KEY,
+  email         TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Привязка job -> user и факт оплаты.
+ALTER TABLE discovery_jobs ADD COLUMN IF NOT EXISTS user_id BIGINT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE discovery_jobs ADD COLUMN IF NOT EXISTS paid BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Платежи (stub-провайдер; провайдер заменим позже).
+CREATE TABLE IF NOT EXISTS payments (
+  id          BIGSERIAL PRIMARY KEY,
+  user_id     BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  job_id      BIGINT NOT NULL REFERENCES discovery_jobs(id) ON DELETE CASCADE,
+  amount_cents INTEGER NOT NULL,
+  currency    TEXT NOT NULL DEFAULT 'USD',
+  status      TEXT NOT NULL DEFAULT 'pending',  -- pending|success|failed
+  provider    TEXT NOT NULL DEFAULT 'stub',
+  external_id TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_payments_user ON payments (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_payments_job ON payments (job_id);
+
+-- Аналитика событий extension.
+CREATE TABLE IF NOT EXISTS analytics_events (
+  id          BIGSERIAL PRIMARY KEY,
+  user_id     BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  event       TEXT NOT NULL,
+  payload     JSONB NOT NULL DEFAULT '{}',
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_analytics_event_time
+  ON analytics_events (event, created_at DESC);

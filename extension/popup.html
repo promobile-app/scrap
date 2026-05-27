@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <style>
@@ -12,11 +12,12 @@
       --card: #18181c;
       --surface-2: #202024;
       --green: #22c55e;
+      --red: #ef4444;
     }
     * { box-sizing: border-box; }
     html { background: transparent; }
     body {
-      width: 460px;
+      width: 380px;
       margin: 0;
       border-radius: 16px;
       overflow: hidden;
@@ -28,96 +29,94 @@
     header {
       display: flex; align-items: center; gap: 9px;
       padding: 15px 17px;
+      border-bottom: 1px solid var(--line);
     }
     .logo {
       width: 30px; height: 30px; border-radius: 11px;
       background: linear-gradient(135deg, #4a7bff, #2f5fe0);
       display: flex; align-items: center; justify-content: center;
     }
-    .title { font-weight: 700; font-size: 14px; }
+    .title { font-weight: 700; font-size: 14px; flex: 1; }
     .title span { color: #5b8bff; }
-    .tabs {
-      display: flex; gap: 6px; margin: 2px 14px 0;
-      background: var(--surface-2); padding: 5px; border-radius: 14px;
-    }
-    .tab {
-      flex: 1; padding: 9px 8px; border: 0; cursor: pointer;
-      background: transparent; color: var(--muted);
-      font: inherit; font-size: 12px; font-weight: 700;
-      border-radius: 10px; transition: background .15s, color .15s;
-    }
-    .tab.active { background: var(--card); color: var(--ink); }
-    main { padding: 14px 17px 20px; }
-    .pane { display: none; }
-    .pane.active { display: block; }
+    .userbar { font-size: 11px; color: var(--muted); }
+    .userbar a { color: #5b8bff; cursor: pointer; text-decoration: none; }
+    main { padding: 16px 17px 18px; min-height: 220px; }
+    .screen { display: none; }
+    .screen.active { display: block; }
     input {
       width: 100%; padding: 11px 14px; margin-bottom: 10px;
-      border: 1px solid var(--line); border-radius: 13px; outline: none;
+      border: 1px solid var(--line); border-radius: 12px; outline: none;
       background: var(--card); color: var(--ink); font: inherit;
     }
     input:focus { border-color: var(--accent); }
-    .go {
-      font: inherit; font-weight: 700;
+    .btn {
+      font: inherit; font-weight: 700; font-size: 13px;
       width: 100%;
-      padding: 12px 16px; border: 0; border-radius: 15px; cursor: pointer;
-      background: var(--accent);
-      color: #fff;
+      padding: 12px 16px; border: 0; border-radius: 13px; cursor: pointer;
+      background: var(--accent); color: #fff;
+      transition: background .15s;
     }
-    .go:hover { background: #345fdb; }
-    .go:disabled { opacity: .55; cursor: not-allowed; }
+    .btn:hover:not(:disabled) { background: #345fdb; }
+    .btn:disabled { opacity: .55; cursor: not-allowed; }
+    .btn.secondary { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); }
+    .btn.secondary:hover:not(:disabled) { background: #2a2a30; }
     .muted { color: var(--muted); font-size: 12px; }
-    .target {
-      display: flex; align-items: center; gap: 8px; margin: 13px 0;
-      background: var(--surface-2);
-      border: 1px solid var(--line); border-radius: 15px; padding: 11px 13px;
+    .err { color: var(--red); font-size: 12px; margin: 6px 0; }
+    .ok { color: var(--green); font-size: 12px; margin: 6px 0; }
+    .switch {
+      text-align: center; margin-top: 12px; font-size: 12px; color: var(--muted);
     }
-    .target b { font-size: 13px; }
-    .mgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 13px 0; }
+    .switch a { color: #5b8bff; cursor: pointer; text-decoration: none; }
+    .app-card {
+      display: flex; align-items: center; gap: 10px;
+      background: var(--surface-2); border: 1px solid var(--line);
+      border-radius: 14px; padding: 12px; margin-bottom: 14px;
+    }
+    .app-card b { font-size: 13px; }
+    .mgrid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin: 14px 0; }
     .mtile {
       background: var(--surface-2); border: 1px solid var(--line);
-      border-radius: 18px; padding: 14px 15px;
+      border-radius: 14px; padding: 14px 10px; text-align: center;
     }
-    .mtile .mv { font-size: 23px; font-weight: 800; line-height: 1; }
-    .mtile .ml { font-size: 11px; color: var(--muted); margin-top: 6px; font-weight: 600; }
-    .tw {
-      border: 1px solid var(--line); border-radius: 16px;
-      overflow: hidden; margin-top: 12px;
-    }
-    table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-    th {
-      text-align: left; padding: 9px 11px; color: var(--muted);
-      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
-      border-bottom: 1px solid var(--line); background: var(--surface-2);
-    }
-    td { padding: 9px 11px; border-bottom: 1px solid var(--line); }
-    tr:last-child td { border-bottom: 0; }
-    .num { text-align: right; font-variant-numeric: tabular-nums; }
-    .rank-top { color: var(--green); font-weight: 700; }
-    .tgt { color: #5b8bff; font-weight: 700; }
-    .result { max-height: 360px; overflow-y: auto; margin-top: 4px; }
-    .hrow {
-      display: flex; align-items: center; gap: 9px;
-      background: var(--surface-2); border: 1px solid var(--line);
-      border-radius: 13px; padding: 9px 12px; margin-bottom: 7px;
-    }
-    .hrow .hmain { flex: 1; min-width: 0; }
-    .hrow .ht { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .hrow .hs { font-size: 11px; color: var(--muted); margin-top: 2px;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .hrow .hr { font-size: 15px; font-weight: 800; }
-    .secbtn {
-      padding: 8px 12px; border-radius: 11px; background: var(--surface-2);
-      color: var(--ink); border: 1px solid var(--line);
-      font: inherit; font-weight: 700; font-size: 12px; cursor: pointer;
-    }
-    .secbtn:hover { background: #2a2a30; }
+    .mtile .mv { font-size: 22px; font-weight: 800; line-height: 1; }
+    .mtile .ml { font-size: 10px; color: var(--muted); margin-top: 6px;
+      font-weight: 600; text-transform: uppercase; letter-spacing: .3px; }
     .spinner {
-      width: 15px; height: 15px; border-radius: 50%;
+      width: 14px; height: 14px; border-radius: 50%;
       border: 2px solid var(--line); border-top-color: #5b8bff;
-      display: inline-block; vertical-align: -3px; margin-right: 7px;
+      display: inline-block; vertical-align: -2px; margin-right: 6px;
       animation: spin .7s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+    .progress {
+      height: 4px; border-radius: 2px; background: var(--surface-2);
+      overflow: hidden; margin: 12px 0;
+    }
+    .progress > div {
+      height: 100%; background: var(--accent); transition: width .3s;
+    }
+    .stages { font-size: 11px; color: var(--muted); margin: 6px 0; }
+    .price {
+      font-size: 28px; font-weight: 800; text-align: center; margin: 16px 0 6px;
+    }
+    .pitch {
+      text-align: center; font-size: 12px; color: var(--muted); margin-bottom: 14px;
+    }
+    .kw-list { max-height: 260px; overflow-y: auto; margin-top: 10px;
+      border: 1px solid var(--line); border-radius: 12px; }
+    .kw-list table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    .kw-list th {
+      text-align: left; padding: 8px 11px; color: var(--muted);
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .3px; background: var(--surface-2);
+      border-bottom: 1px solid var(--line); position: sticky; top: 0;
+    }
+    .kw-list td { padding: 8px 11px; border-bottom: 1px solid var(--line); }
+    .kw-list tr:last-child td { border-bottom: 0; }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .rank-top { color: var(--green); font-weight: 700; }
+    .row-actions { display: flex; gap: 8px; margin-top: 10px; }
+    .row-actions .btn { width: auto; flex: 1; padding: 10px 12px; }
   </style>
 </head>
 <body>
@@ -131,30 +130,81 @@
       </svg>
     </div>
     <div class="title">Rank<span>Radar</span></div>
+    <div class="userbar" id="userbar"></div>
   </header>
-  <div class="tabs">
-    <button class="tab active" data-tab="kw">Ключи</button>
-    <button class="tab" data-tab="metric">Метрики</button>
-    <button class="tab" data-tab="hist">История</button>
-  </div>
   <main>
-    <div class="pane active" id="pane-kw">
-      <div id="target" class="target" style="display:none"></div>
-      <div style="display:flex;gap:8px">
-        <button id="go" class="go" style="flex:1">Подобрать ключи</button>
-        <button id="recalcBtn" class="secbtn" title="Подобрать заново, игнорируя кэш">↻</button>
+
+    <!-- 1. AUTH -->
+    <div class="screen" id="screen-auth">
+      <div id="auth-title" style="font-weight:700;font-size:14px;margin-bottom:10px">Sign in</div>
+      <input id="email" type="email" placeholder="Email" autocomplete="email" />
+      <input id="password" type="password" placeholder="Password" autocomplete="current-password" />
+      <div id="auth-err" class="err" style="display:none"></div>
+      <button id="auth-submit" class="btn">Sign in</button>
+      <div class="switch">
+        <span id="auth-switch-text">No account?</span>
+        <a id="auth-switch">Create one</a>
       </div>
-      <div id="result" class="result"></div>
     </div>
-    <div class="pane" id="pane-metric">
-      <input id="kwInput" placeholder="ключевое слово" />
-      <button id="checkBtn" class="go">Проверить позицию</button>
-      <div id="metricResult" class="result"></div>
+
+    <!-- 2. UNSUPPORTED PAGE -->
+    <div class="screen" id="screen-unsupported">
+      <p class="muted" style="margin-top:18px;text-align:center">
+        Unsupported page.<br/>Please open an App Store or Google Play app page.
+      </p>
     </div>
-    <div class="pane" id="pane-hist">
-      <button id="histRefresh" class="secbtn" style="width:100%">↻ Обновить историю</button>
-      <div id="histResult" class="result"></div>
+
+    <!-- 3. LOADING -->
+    <div class="screen" id="screen-loading">
+      <div id="loading-app" class="app-card" style="display:none"></div>
+      <p><span class="spinner"></span><b>Analyzing app...</b></p>
+      <p class="muted">This may take up to 90 seconds.</p>
+      <div class="progress"><div id="progress-bar" style="width:5%"></div></div>
+      <p id="stage" class="stages">Fetching app data...</p>
     </div>
+
+    <!-- 4. SUMMARY -->
+    <div class="screen" id="screen-summary">
+      <div id="summary-app" class="app-card"></div>
+      <div class="mgrid">
+        <div class="mtile"><div class="mv" id="m-ranked">0</div><div class="ml">Ranked</div></div>
+        <div class="mtile"><div class="mv" id="m-top3">0</div><div class="ml">Top 3</div></div>
+        <div class="mtile"><div class="mv" id="m-top10">0</div><div class="ml">Top 10</div></div>
+      </div>
+      <p id="summary-empty" class="muted" style="display:none;text-align:center">
+        No keyword rankings found.
+      </p>
+      <div class="price">$4.99</div>
+      <p class="pitch">Unlock full keyword list and download as Excel.</p>
+      <button id="unlock-btn" class="btn">Unlock full report</button>
+      <button id="reanalyze-btn" class="btn secondary" style="margin-top:8px">Re-analyze</button>
+    </div>
+
+    <!-- 5. PAYMENT WAITING -->
+    <div class="screen" id="screen-payment">
+      <p><span class="spinner"></span><b>Waiting for payment...</b></p>
+      <p class="muted">Complete the payment in the opened tab. We'll unlock the report automatically.</p>
+      <button id="payment-cancel" class="btn secondary" style="margin-top:14px">Cancel</button>
+    </div>
+
+    <!-- 6. UNLOCKED -->
+    <div class="screen" id="screen-unlocked">
+      <div id="unlocked-app" class="app-card"></div>
+      <div class="mgrid">
+        <div class="mtile"><div class="mv" id="u-ranked">0</div><div class="ml">Ranked</div></div>
+        <div class="mtile"><div class="mv" id="u-top3">0</div><div class="ml">Top 3</div></div>
+        <div class="mtile"><div class="mv" id="u-top10">0</div><div class="ml">Top 10</div></div>
+      </div>
+      <button id="download-btn" class="btn">⬇ Download Excel</button>
+      <div class="kw-list" id="kw-list"></div>
+    </div>
+
+    <!-- 7. ERROR -->
+    <div class="screen" id="screen-error">
+      <p id="error-text" class="err" style="text-align:center;margin-top:18px"></p>
+      <button id="error-retry" class="btn" style="margin-top:10px">Try again</button>
+    </div>
+
   </main>
   <script src="popup.js"></script>
 </body>

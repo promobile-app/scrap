@@ -1,39 +1,100 @@
-// Адрес бэкенда RankRadar на Railway. Поменяйте, если домен другой.
-const API = 'https://scrap-production-c0db.up.railway.app';
+// RankRadar Chrome Extension — ASO keyword analyzer.
+// Flow по плану: auth → auto-analyze → summary → paywall → unlocked + .xlsx.
 
-const goBtn = document.getElementById('go');
-const recalcBtn = document.getElementById('recalcBtn');
-const resultEl = document.getElementById('result');
-const targetEl = document.getElementById('target');
-const kwInput = document.getElementById('kwInput');
-const checkBtn = document.getElementById('checkBtn');
-const metricResultEl = document.getElementById('metricResult');
-const histResult = document.getElementById('histResult');
-const histRefresh = document.getElementById('histRefresh');
+const API = 'https://scrap-production-c0db.up.railway.app';
 
 const FLAGS = {
   us: '🇺🇸', gb: '🇬🇧', de: '🇩🇪', ua: '🇺🇦', ru: '🇷🇺', fr: '🇫🇷', pl: '🇵🇱',
   es: '🇪🇸', it: '🇮🇹', ca: '🇨🇦', br: '🇧🇷', in: '🇮🇳', jp: '🇯🇵', tr: '🇹🇷',
 };
 
-function platformIcon(platform) {
-  if (platform === 'android') {
-    return `<svg viewBox="0 0 512 512" width="14" height="14" style="vertical-align:-2px">
-      <path fill="#34A853" d="M104.6 13c-2.8 1.4-5.5 3.3-7.9 5.5-9.3 8.7-15 22.3-15 39.5v396c0 17.2 5.7 30.8 15 39.5 2.4 2.2 5.1 4.1 7.9 5.5l220.7-243z"/>
-      <path fill="#EA4335" d="M325.3 234.3 104.6 13l280.8 161.2z"/>
-      <path fill="#FBBC04" d="M104.6 499 325.3 277.7l60.1 60.1z"/>
-      <path fill="#4285F4" d="M447.1 256c0 19.6-10.5 36.9-26.6 46.1l-35.2 20.4-60.1-66.5 60.1-66.5 35.4 20.5c16 9.1 26.4 26.3 26.4 46z"/>
-    </svg>`;
-  }
-  return `<svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:-2px">
-    <rect width="24" height="24" rx="5.4" fill="#1f9bf5"/>
-    <g stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" fill="none">
-      <path d="M7.4 17 12 7.4 16.6 17"/><path d="M9.2 14.1h5.6"/>
-    </g>
-  </svg>`;
+// chrome.storage недоступен на open-in-browser preview — даём fallback на localStorage.
+const storage = {
+  get(keys) {
+    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+      return new Promise((resolve) => chrome.storage.local.get(keys, resolve));
+    }
+    const out = {};
+    (Array.isArray(keys) ? keys : [keys]).forEach((k) => {
+      const v = localStorage.getItem('rr_' + k);
+      if (v != null) {
+        try { out[k] = JSON.parse(v); } catch { out[k] = v; }
+      }
+    });
+    return Promise.resolve(out);
+  },
+  set(obj) {
+    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+      return new Promise((resolve) => chrome.storage.local.set(obj, resolve));
+    }
+    Object.entries(obj).forEach(([k, v]) => {
+      localStorage.setItem('rr_' + k, JSON.stringify(v));
+    });
+    return Promise.resolve();
+  },
+  remove(keys) {
+    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+      return new Promise((resolve) => chrome.storage.local.remove(keys, resolve));
+    }
+    (Array.isArray(keys) ? keys : [keys]).forEach((k) => localStorage.removeItem('rr_' + k));
+    return Promise.resolve();
+  },
+};
+
+// --- DOM ---
+const screens = {
+  auth: document.getElementById('screen-auth'),
+  unsupported: document.getElementById('screen-unsupported'),
+  loading: document.getElementById('screen-loading'),
+  summary: document.getElementById('screen-summary'),
+  payment: document.getElementById('screen-payment'),
+  unlocked: document.getElementById('screen-unlocked'),
+  error: document.getElementById('screen-error'),
+};
+
+function show(name) {
+  Object.values(screens).forEach((el) => el.classList.remove('active'));
+  screens[name].classList.add('active');
 }
 
-// Разбор страницы магазина: платформа, ID приложения, гео.
+const userbarEl = document.getElementById('userbar');
+
+// --- State ---
+let token = null;
+let userEmail = null;
+let currentJobId = null;
+let currentPaymentId = null;
+let pollAnalysisTimer = null;
+let pollPaymentTimer = null;
+let analysisStartedAt = 0;
+
+// --- API helper ---
+async function api(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  if (token) headers.Authorization = 'Bearer ' + token;
+  const res = await fetch(API + path, { ...opts, headers });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.error || 'request failed');
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
+  return data;
+}
+
+function logEvent(event, payload = {}) {
+  fetch(API + '/events', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: 'Bearer ' + token } : {}),
+    },
+    body: JSON.stringify({ event, payload }),
+  }).catch(() => {});
+}
+
+// --- Store-page parsing (popup нужен лишь URL активной вкладки) ---
 function parsePage(url) {
   try {
     const u = new URL(url);
@@ -42,254 +103,342 @@ function parsePage(url) {
       const id = u.pathname.match(/id(\d+)/);
       if (!id || !/\/app\//.test(u.pathname)) return null;
       const country = (u.pathname.match(/\/([a-z]{2})\/app\//i)?.[1] || 'us').toLowerCase();
-      return { platform: 'ios', appId: id[1], country };
+      const language = u.searchParams.get('l') || null;
+      return { platform: 'ios', appId: id[1], country, language };
     }
     if (h.endsWith('play.google.com')) {
       if (!u.pathname.includes('/store/apps/details')) return null;
       const appId = u.searchParams.get('id');
       if (!appId) return null;
-      return { platform: 'android', appId, country: (u.searchParams.get('gl') || 'us').toLowerCase() };
+      const country = (u.searchParams.get('gl') || 'us').toLowerCase();
+      const language = u.searchParams.get('hl') || null;
+      return { platform: 'android', appId, country, language };
     }
-  } catch {
-    return null;
-  }
+  } catch { return null; }
   return null;
 }
 
 async function activeTabUrl() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  return tab?.url ?? '';
+  if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    return tab?.url ?? '';
+  }
+  return location.href; // preview-режим
 }
 
-// --- Вкладки ---
-let histLoaded = false;
-document.querySelectorAll('.tab').forEach((tab) => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
-    document.querySelectorAll('.pane').forEach((p) => p.classList.remove('active'));
-    tab.classList.add('active');
-    document.getElementById('pane-' + tab.dataset.tab).classList.add('active');
-    if (tab.dataset.tab === 'hist' && !histLoaded) {
-      histLoaded = true;
-      loadHistory();
-    }
-  });
-});
-
-// Мини-спарклайн динамики позиции.
-function miniSpark(history) {
-  const pts = (history || []).filter((h) => h.rank != null);
-  if (pts.length < 2) return '<span style="width:64px;flex:none"></span>';
-  const W = 64, H = 22;
-  const ranks = pts.map((p) => p.rank);
-  const mn = Math.min(...ranks), mx = Math.max(...ranks);
-  const fx = (i) => (i * W) / (pts.length - 1);
-  const fy = (r) => (mx === mn ? H / 2 : 3 + ((r - mn) / (mx - mn)) * (H - 6));
-  const line = pts.map((p, i) => `${fx(i).toFixed(1)},${fy(p.rank).toFixed(1)}`).join(' ');
-  return `<svg width="${W}" height="${H}" style="flex:none">
-    <polyline points="${line}" fill="none" stroke="#5b8bff" stroke-width="1.6"
-      stroke-linejoin="round" stroke-linecap="round"/></svg>`;
-}
-
-// --- Вкладка «История» (общая с дашбордом — одна БД) ---
-async function loadHistory() {
-  histResult.innerHTML = '<p class="muted" style="margin-top:12px"><span class="spinner"></span>загрузка…</p>';
-  try {
-    const d = await fetch(API + '/history/all').then((r) => r.json());
-    const items = d.items || [];
-    if (!items.length) {
-      histResult.innerHTML = '<p class="muted" style="margin-top:12px">Пока нет сохранённых замеров.</p>';
-      return;
-    }
-    histResult.innerHTML = items.map((it) => {
-      const hist = it.history || [];
-      const last = hist[hist.length - 1] || {};
-      const flag = FLAGS[it.country] || (it.country || '').toUpperCase();
-      return `<div class="hrow">
-        <div class="hmain">
-          <div class="ht">${platformIcon(it.platform)} ${flag} «${it.term}»</div>
-          <div class="hs">${it.appTitle || it.appId}</div>
-        </div>
-        ${miniSpark(hist)}
-        <div class="hr ${last.rank ? (last.rank <= 10 ? 'rank-top' : '') : ''}">
-          ${last.rank ? '#' + last.rank : '—'}</div>
-      </div>`;
-    }).join('');
-  } catch (e) {
-    histResult.innerHTML = '<p class="muted">Не удалось загрузить историю: ' + (e.message || e) + '</p>';
+function openTab(url) {
+  if (typeof chrome !== 'undefined' && chrome.tabs?.create) {
+    chrome.tabs.create({ url });
+  } else {
+    window.open(url, '_blank');
   }
 }
 
-// Скачивание CSV: тянем файл и сохраняем через blob-ссылку.
-async function exportCsv(url, filename) {
+function appCardHtml(d) {
+  const flag = FLAGS[d.country] || (d.country || '').toUpperCase();
+  const platformIcon = d.platform === 'android'
+    ? '<span style="color:#34A853;font-weight:700">▶</span>'
+    : '<span style="color:#1f9bf5;font-weight:700">A</span>';
+  return `${platformIcon}
+    <span>${flag}</span>
+    <b style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+      ${d.appTitle || d.appId}</b>`;
+}
+
+// --- AUTH SCREEN ---
+let authMode = 'login'; // 'login' | 'register'
+
+const authTitleEl = document.getElementById('auth-title');
+const authSubmitEl = document.getElementById('auth-submit');
+const authSwitchEl = document.getElementById('auth-switch');
+const authSwitchTextEl = document.getElementById('auth-switch-text');
+const authErrEl = document.getElementById('auth-err');
+const emailEl = document.getElementById('email');
+const passwordEl = document.getElementById('password');
+
+function renderAuthMode() {
+  if (authMode === 'login') {
+    authTitleEl.textContent = 'Sign in';
+    authSubmitEl.textContent = 'Sign in';
+    authSwitchTextEl.textContent = 'No account?';
+    authSwitchEl.textContent = 'Create one';
+  } else {
+    authTitleEl.textContent = 'Create account';
+    authSubmitEl.textContent = 'Create account';
+    authSwitchTextEl.textContent = 'Have an account?';
+    authSwitchEl.textContent = 'Sign in';
+  }
+  authErrEl.style.display = 'none';
+}
+
+authSwitchEl.addEventListener('click', () => {
+  authMode = authMode === 'login' ? 'register' : 'login';
+  renderAuthMode();
+});
+
+authSubmitEl.addEventListener('click', submitAuth);
+passwordEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitAuth(); });
+
+async function submitAuth() {
+  const email = emailEl.value.trim();
+  const password = passwordEl.value;
+  if (!email || !password) {
+    authErrEl.textContent = 'Email and password are required';
+    authErrEl.style.display = 'block';
+    return;
+  }
+  authSubmitEl.disabled = true;
   try {
-    const res = await fetch(url);
+    const path = authMode === 'login' ? '/auth/login' : '/auth/register';
+    const d = await api(path, { method: 'POST', body: JSON.stringify({ email, password }) });
+    token = d.token;
+    userEmail = d.user.email;
+    await storage.set({ token, userEmail });
+    renderUserbar();
+    boot();
+  } catch (e) {
+    authErrEl.textContent = e.message || 'Auth failed';
+    authErrEl.style.display = 'block';
+  } finally {
+    authSubmitEl.disabled = false;
+  }
+}
+
+function renderUserbar() {
+  if (!userEmail) { userbarEl.innerHTML = ''; return; }
+  userbarEl.innerHTML = `${userEmail.split('@')[0]} · <a id="logout">log out</a>`;
+  document.getElementById('logout').addEventListener('click', logout);
+}
+
+async function logout() {
+  await storage.remove(['token', 'userEmail']);
+  token = null;
+  userEmail = null;
+  renderUserbar();
+  stopAllPolling();
+  show('auth');
+  renderAuthMode();
+}
+
+// --- ANALYSIS ---
+function setProgress(state) {
+  const total = state.total || 0;
+  const processed = state.processed || 0;
+  let pct = 5;
+  if (state.status === 'pending') pct = 8;
+  else if (state.status === 'running') {
+    pct = total > 0 ? Math.min(95, 10 + (processed / total) * 80) : 30;
+  } else if (state.status === 'done') pct = 100;
+  document.getElementById('progress-bar').style.width = pct + '%';
+  const stage = document.getElementById('stage');
+  if (state.status === 'pending') stage.textContent = 'Queued — waiting for a free slot...';
+  else if (state.status === 'running')
+    stage.textContent = total
+      ? `Analyzing keyword rankings... ${processed} / ${total}`
+      : 'Fetching app data...';
+  else if (state.status === 'done') stage.textContent = 'Preparing report...';
+  const appBox = document.getElementById('loading-app');
+  if (state.appTitle) {
+    appBox.innerHTML = appCardHtml(state);
+    appBox.style.display = 'flex';
+  }
+}
+
+function stopAllPolling() {
+  if (pollAnalysisTimer) { clearTimeout(pollAnalysisTimer); pollAnalysisTimer = null; }
+  if (pollPaymentTimer) { clearTimeout(pollPaymentTimer); pollPaymentTimer = null; }
+}
+
+async function startAnalysis(force = false) {
+  stopAllPolling();
+  const url = await activeTabUrl();
+  if (!parsePage(url)) {
+    show('unsupported');
+    return;
+  }
+  show('loading');
+  setProgress({ status: 'pending', processed: 0, total: 0 });
+  analysisStartedAt = Date.now();
+  logEvent('analysis_started', { url });
+  try {
+    const state = await api('/ext/analyze?url=' + encodeURIComponent(url) + (force ? '&fresh=1' : ''));
+    currentJobId = state.jobId;
+    await storage.set({ lastJobId: currentJobId });
+    handleJobState(state);
+  } catch (e) {
+    if (e.status === 401) { await logout(); return; }
+    showError(e.message || 'Service is temporarily unavailable. Please try again later.');
+  }
+}
+
+async function pollJob() {
+  if (!currentJobId) return;
+  if (Date.now() - analysisStartedAt > 90_000) {
+    showError('Analysis is taking longer than expected.\nPlease try again later.');
+    return;
+  }
+  try {
+    const state = await api('/ext/job/' + currentJobId);
+    handleJobState(state);
+  } catch (e) {
+    if (e.status === 401) { await logout(); return; }
+    if (e.status === 404) { showError('Job not found.'); return; }
+    // Сеть/бэк недоступен — продолжаем поллить мягко.
+    pollAnalysisTimer = setTimeout(pollJob, 4000);
+  }
+}
+
+function handleJobState(state) {
+  if (state.status === 'pending' || state.status === 'running') {
+    setProgress(state);
+    pollAnalysisTimer = setTimeout(pollJob, 3000);
+    return;
+  }
+  if (state.status === 'error') {
+    showError(state.error || 'Analysis failed. Please try again.');
+    return;
+  }
+  // done
+  logEvent('analysis_completed', { jobId: state.jobId });
+  if (state.paid) renderUnlocked(state);
+  else renderSummary(state);
+}
+
+// --- SUMMARY ---
+function renderSummary(state) {
+  show('summary');
+  document.getElementById('summary-app').innerHTML = appCardHtml(state);
+  const s = state.summary || { rankedKeywords: 0, top3: 0, top10: 0 };
+  document.getElementById('m-ranked').textContent = s.rankedKeywords;
+  document.getElementById('m-top3').textContent = s.top3;
+  document.getElementById('m-top10').textContent = s.top10;
+  document.getElementById('summary-empty').style.display =
+    s.rankedKeywords === 0 ? 'block' : 'none';
+}
+
+document.getElementById('unlock-btn').addEventListener('click', startCheckout);
+document.getElementById('reanalyze-btn').addEventListener('click', () => startAnalysis(true));
+
+// --- PAYMENT ---
+async function startCheckout() {
+  if (!currentJobId) return;
+  logEvent('payment_started', { jobId: currentJobId });
+  try {
+    const d = await api('/payment/checkout', {
+      method: 'POST',
+      body: JSON.stringify({ jobId: currentJobId }),
+    });
+    currentPaymentId = d.paymentId;
+    openTab(API + d.checkoutUrl);
+    show('payment');
+    pollPaymentTimer = setTimeout(pollPayment, 2500);
+  } catch (e) {
+    if (e.status === 401) { await logout(); return; }
+    showError(e.message || 'Could not start payment.');
+  }
+}
+
+async function pollPayment() {
+  if (!currentPaymentId) return;
+  try {
+    const d = await api('/payment/status/' + currentPaymentId);
+    if (d.status === 'success') {
+      logEvent('payment_success', { paymentId: currentPaymentId });
+      const job = await api('/ext/job/' + currentJobId);
+      renderUnlocked(job);
+      return;
+    }
+    if (d.status === 'failed') {
+      logEvent('payment_failed', { paymentId: currentPaymentId });
+      showError('Payment failed.\nPlease try again.');
+      return;
+    }
+    pollPaymentTimer = setTimeout(pollPayment, 2500);
+  } catch {
+    pollPaymentTimer = setTimeout(pollPayment, 4000);
+  }
+}
+
+document.getElementById('payment-cancel').addEventListener('click', () => {
+  stopAllPolling();
+  currentPaymentId = null;
+  // Возвращаемся к summary текущей job.
+  if (currentJobId) {
+    api('/ext/job/' + currentJobId).then(handleJobState).catch(() => show('error'));
+  }
+});
+
+// --- UNLOCKED ---
+function renderUnlocked(state) {
+  show('unlocked');
+  document.getElementById('unlocked-app').innerHTML = appCardHtml(state);
+  const s = state.summary || { rankedKeywords: 0, top3: 0, top10: 0 };
+  document.getElementById('u-ranked').textContent = s.rankedKeywords;
+  document.getElementById('u-top3').textContent = s.top3;
+  document.getElementById('u-top10').textContent = s.top10;
+  const ranked = (state.keywords || []).filter((k) => k.rank != null);
+  const list = document.getElementById('kw-list');
+  if (!ranked.length) {
+    list.innerHTML = '<p class="muted" style="padding:14px;text-align:center">'
+      + 'No keyword rankings found.</p>';
+    return;
+  }
+  list.innerHTML = `<table>
+    <thead><tr><th>Keyword</th><th class="num">Rank</th></tr></thead>
+    <tbody>${ranked.map((k) => `<tr>
+      <td>${k.term}</td>
+      <td class="num ${k.rank <= 10 ? 'rank-top' : ''}">#${k.rank}</td>
+    </tr>`).join('')}</tbody></table>`;
+}
+
+document.getElementById('download-btn').addEventListener('click', downloadExcel);
+
+async function downloadExcel() {
+  if (!currentJobId) return;
+  try {
+    const res = await fetch(API + '/ext/job/' + currentJobId + '/export.xlsx', {
+      headers: { Authorization: 'Bearer ' + token },
+    });
+    if (!res.ok) throw new Error('Download failed');
     const blob = await res.blob();
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = filename;
+    a.download = 'keywords-report.xlsx';
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    logEvent('report_downloaded', { jobId: currentJobId });
   } catch (e) {
-    alert('Не удалось выгрузить CSV: ' + (e.message || e));
+    alert('Could not download: ' + (e.message || e));
   }
 }
 
-// --- Вкладка «Ключи приложения» ---
-function renderKeywords(d) {
-  targetEl.style.display = 'flex';
-  targetEl.innerHTML = `${platformIcon(d.platform)}
-    <span>${FLAGS[d.country] || (d.country || '').toUpperCase()}</span>
-    <b>${d.appTitle || d.appId}</b>`;
-  const ranked = (d.keywords || []).filter((k) => k.rank != null);
-  const queued = d.status === 'pending';
-  const running = d.status === 'running';
-  const active = queued || running;
-  const head = queued
-    ? `<p class="muted" style="margin:8px 0"><span class="spinner"></span>в очереди — ждём свободный слот…</p>`
-    : running
-      ? `<p class="muted" style="margin:8px 0"><span class="spinner"></span>идёт подбор:
-         ${d.processed} / ${d.total || '…'} — заполняется на ходу</p>`
-      : `<p class="muted" style="margin:8px 0">${ranked.length} ключей с позицией
-         · из ${(d.keywords || []).length} найденных</p>`;
-  if (!ranked.length) {
-    resultEl.innerHTML = head + (active ? '' :
-      '<p class="muted">Приложение не ранжируется ни по одному из найденных ключей.</p>');
-    return;
-  }
-  const sBtn = 'padding:8px 12px;border-radius:11px;background:var(--surface-2);'
-    + 'color:var(--ink);border:1px solid var(--line);font-weight:700;font-size:12px;cursor:pointer';
-  const exportRow = active ? '' : `<div style="display:flex;gap:8px;margin:10px 0 2px">
-    <button style="${sBtn}" onclick="exportCsv('${API}/discover/job/${d.jobId}/export.csv','keywords-${d.appId}.csv')">⬇ Экспорт CSV</button>
-    <button style="${sBtn}" onclick="exportCsv('${API}/discover/export.csv','all-keywords.csv')">Все приложения</button>
-  </div>`;
-  resultEl.innerHTML = `
-    ${head}
-    ${exportRow}
-    <div class="tw"><table>
-      <tr><th>Ключ</th><th class="num">Поз.</th><th class="num">Объём</th>
-        <th class="num">Сложн.</th><th class="num">Конк.</th></tr>
-      ${ranked.map((k) => `<tr>
-        <td>${k.term}</td>
-        <td class="num ${k.rank <= 10 ? 'rank-top' : ''}">#${k.rank}</td>
-        <td class="num">${k.volume}</td>
-        <td class="num">${k.difficulty}</td>
-        <td class="num">${k.totalResults}</td>
-      </tr>`).join('')}
-    </table></div>
-    <p class="muted" style="margin-top:9px">Объём и сложность — приближённые оценки,
-    не данные Apple Search Ads.</p>`;
+// --- ERROR ---
+function showError(msg) {
+  stopAllPolling();
+  show('error');
+  document.getElementById('error-text').textContent = msg;
 }
+document.getElementById('error-retry').addEventListener('click', () => startAnalysis(false));
 
-async function discoverKeywords(force) {
+// --- BOOTSTRAP ---
+async function boot() {
+  logEvent('extension_opened');
+  if (!token) { show('auth'); renderAuthMode(); return; }
   const url = await activeTabUrl();
-  if (!parsePage(url)) {
-    resultEl.innerHTML = `<p class="muted" style="margin-top:12px">
-      Откройте страницу приложения в App Store (apps.apple.com)
-      или Google Play (play.google.com).</p>`;
-    return;
-  }
-  goBtn.disabled = true;
-  recalcBtn.disabled = true;
-  targetEl.style.display = 'none';
-  resultEl.innerHTML = `<p class="muted" style="margin-top:12px">
-    <span class="spinner"></span>запускаем подбор ключей…</p>`;
-  try {
-    let state = await fetch(API + '/discover/by-url?url=' + encodeURIComponent(url)
-      + (force ? '&fresh=1' : '')).then((r) => r.json());
-    if (state.error) {
-      resultEl.innerHTML = '<p class="muted">Ошибка: ' + state.error + '</p>';
-      return;
-    }
-    renderKeywords(state);
-    let guard = 0;
-    while ((state.status === 'pending' || state.status === 'running') && guard < 500) {
-      guard++;
-      await new Promise((r) => setTimeout(r, 4000));
-      state = await fetch(API + '/discover/job/' + state.jobId).then((r) => r.json());
-      if (state.error && !state.jobId) break;
-      renderKeywords(state);
-    }
-    if (state.status === 'error') {
-      resultEl.innerHTML = '<p class="muted">Ошибка подбора: ' + (state.error || '') + '</p>';
-    }
-  } catch (e) {
-    resultEl.innerHTML = '<p class="muted">Не удалось получить ключи: ' + (e.message || e) + '</p>';
-  } finally {
-    goBtn.disabled = false;
-    recalcBtn.disabled = false;
-  }
+  if (!parsePage(url)) { show('unsupported'); return; }
+  startAnalysis(false);
 }
 
-// --- Вкладка «Метрики по ключу» ---
-function renderMetric(d) {
-  const top = (d.topApps || []).map((a) => `<tr>
-    <td class="num">${a.position}</td>
-    <td class="${a.isTarget ? 'tgt' : ''}">${a.isTarget ? '▶ ' : ''}${a.title}</td>
-  </tr>`).join('');
-  metricResultEl.innerHTML = `
-    <div class="target">${platformIcon(d.platform)}
-      <span>${FLAGS[d.country] || (d.country || '').toUpperCase()}</span>
-      <b>${d.app ? d.app.title : ''}</b></div>
-    <div class="mgrid">
-      <div class="mtile"><div class="mv ${d.rank ? (d.inTop10 ? 'rank-top' : '') : ''}">
-        ${d.rank ? '#' + d.rank : '—'}</div><div class="ml">${d.rank
-          ? 'Позиция «' + d.term + '»'
-          : '«' + d.term + '» — вне выдачи (топ-' + (d.totalResults ?? '?') + ')'}</div></div>
-      <div class="mtile"><div class="mv">${d.volume ? d.volume.score : '—'}</div>
-        <div class="ml">Объём${d.volume ? ' (' + d.volume.source + ')' : ''}</div></div>
-      <div class="mtile"><div class="mv">${d.difficulty ? d.difficulty.score : '—'}</div>
-        <div class="ml">Сложность</div></div>
-      <div class="mtile"><div class="mv">${d.totalResults ?? '—'}</div>
-        <div class="ml">Конкурентов</div></div>
-    </div>
-    ${top ? `<div class="tw"><table>
-      <tr><th class="num">#</th><th>Топ выдачи по «${d.term}»</th></tr>${top}</table></div>` : ''}`;
+async function init() {
+  const stored = await storage.get(['token', 'userEmail']);
+  if (stored.token) {
+    token = stored.token;
+    userEmail = stored.userEmail || null;
+    renderUserbar();
+  }
+  boot();
 }
 
-async function checkKeyword() {
-  const term = kwInput.value.trim();
-  if (!term) return;
-  const url = await activeTabUrl();
-  const p = parsePage(url);
-  if (!p) {
-    metricResultEl.innerHTML = `<p class="muted" style="margin-top:12px">
-      Откройте страницу приложения в App Store или Google Play.</p>`;
-    return;
-  }
-  checkBtn.disabled = true;
-  metricResultEl.innerHTML = `<p class="muted" style="margin-top:12px">
-    <span class="spinner"></span>считаем метрики…</p>`;
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 90000);
-    const q = `country=${p.country}&platform=${p.platform}&term=${encodeURIComponent(term)}`;
-    const res = await fetch(
-      `${API}/apps/${encodeURIComponent(p.appId)}/metrics?${q}`, { signal: ctrl.signal });
-    clearTimeout(timer);
-    const d = await res.json();
-    if (d.error) metricResultEl.innerHTML = '<p class="muted">Ошибка: ' + d.error + '</p>';
-    else renderMetric(d);
-  } catch (e) {
-    const msg = e.name === 'AbortError' ? 'превышено время ожидания' : (e.message || e);
-    metricResultEl.innerHTML = '<p class="muted">Не удалось посчитать метрики: ' + msg + '</p>';
-  } finally {
-    checkBtn.disabled = false;
-  }
-}
-
-goBtn.addEventListener('click', () => discoverKeywords(false));
-recalcBtn.addEventListener('click', () => discoverKeywords(true));
-checkBtn.addEventListener('click', checkKeyword);
-kwInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') checkKeyword(); });
-histRefresh.addEventListener('click', () => { histLoaded = true; loadHistory(); });
-
-// Подсказываем, если вкладка — не страница магазина.
-activeTabUrl().then((url) => {
-  if (!parsePage(url)) {
-    resultEl.innerHTML = `<p class="muted" style="margin-top:12px">
-      Откройте страницу приложения в App Store или Google Play.</p>`;
-  }
-});
+init();

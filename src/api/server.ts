@@ -21,6 +21,7 @@ import {
   saveMetricCheck, getMetricHistory, distinctMetricTargets,
   allDoneDiscoveryJobs,
 } from '../db/repo.js';
+import { registerExtensionRoutes } from './extensionRoutes.js';
 
 /** Экранирование значения для CSV. */
 function csvCell(v: unknown): string {
@@ -456,6 +457,8 @@ app.get<{ Querystring: { country?: string } }>('/languages', async (req) => {
 });
 
 app.get('/health', async () => ({ ok: true }));
+
+await registerExtensionRoutes(app);
 
 app
   .listen({ port: config.port, host: '0.0.0.0' })
