@@ -22,7 +22,7 @@
  */
 import ExcelJS from 'exceljs';
 import { pool, query } from './db/pool.js';
-import { saveAppCandidateKeywords } from './db/repo.js';
+import { saveAppCandidateKeywords, saveMetricCheckBatch } from './db/repo.js';
 
 interface FlagMap { [k: string]: string }
 function parseFlags(argv: string[]): { file: string | null; flags: FlagMap } {
@@ -144,6 +144,12 @@ async function importFile(filePath: string, flags: FlagMap): Promise<void> {
 
   // 1) Постоянный словарь — чтобы BFS не запускался.
   await saveAppCandidateKeywords(platform, appId, country, keywords.map((k) => k.term));
+
+  // 1b) Срез истории — для будущих чартов «rank/volume/difficulty по дням».
+  await saveMetricCheckBatch(
+    { platform, appId, appTitle: appTitle || appId, country, language: null },
+    keywords,
+  );
 
   // 2) Готовая discovery_jobs (status=done) — мгновенный ответ extension.
   // Если запись на (platform, app, country) уже есть и она «done», лучше
