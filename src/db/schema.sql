@@ -126,6 +126,22 @@ CREATE TABLE IF NOT EXISTS keyword_cache (
 CREATE INDEX IF NOT EXISTS idx_keyword_cache_time
   ON keyword_cache (captured_at);
 
+-- Постоянный словарь «кандидатных ключей» для пары (платформа, приложение, страна).
+-- Заполняется при каждом успешном discovery-прогоне и переживает рестарты.
+-- Любой следующий пользователь, запросивший то же приложение, не пересчитывает
+-- набор кандидатов с нуля — мы лишь освежаем для них метрики/ранки.
+CREATE TABLE IF NOT EXISTS app_candidate_keywords (
+  platform     TEXT NOT NULL,
+  app_id       TEXT NOT NULL,
+  country      TEXT NOT NULL,
+  term         TEXT NOT NULL,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (platform, app_id, country, term)
+);
+CREATE INDEX IF NOT EXISTS idx_app_candidate_kw_lookup
+  ON app_candidate_keywords (platform, app_id, country);
+
 -- Пользователи extension (email+password).
 CREATE TABLE IF NOT EXISTS users (
   id            BIGSERIAL PRIMARY KEY,

@@ -77,7 +77,12 @@
     .mtile {
       background: var(--surface-2); border: 1px solid var(--line);
       border-radius: 14px; padding: 14px 10px; text-align: center;
+      transition: border-color .15s, background .15s;
     }
+    .mtile.clickable { cursor: pointer; }
+    .mtile.clickable:hover { background: #2a2a30; }
+    .mtile.active { border-color: var(--accent); background: #1f2640; }
+    .mtile.active .mv { color: #8aaaff; }
     .mtile .mv { font-size: 22px; font-weight: 800; line-height: 1; }
     .mtile .ml { font-size: 10px; color: var(--muted); margin-top: 6px;
       font-weight: 600; text-transform: uppercase; letter-spacing: .3px; }
@@ -191,9 +196,12 @@
     <div class="screen" id="screen-unlocked">
       <div id="unlocked-app" class="app-card"></div>
       <div class="mgrid">
-        <div class="mtile"><div class="mv" id="u-ranked">0</div><div class="ml">Ranked</div></div>
-        <div class="mtile"><div class="mv" id="u-top3">0</div><div class="ml">Top 3</div></div>
-        <div class="mtile"><div class="mv" id="u-top10">0</div><div class="ml">Top 10</div></div>
+        <div class="mtile clickable" id="u-tile-ranked">
+          <div class="mv" id="u-ranked">0</div><div class="ml">Ranked</div></div>
+        <div class="mtile clickable" id="u-tile-top3">
+          <div class="mv" id="u-top3">0</div><div class="ml">Top 3</div></div>
+        <div class="mtile clickable" id="u-tile-top10">
+          <div class="mv" id="u-top10">0</div><div class="ml">Top 10</div></div>
       </div>
       <button id="download-btn" class="btn">⬇ Download Excel</button>
       <div class="kw-list" id="kw-list"></div>

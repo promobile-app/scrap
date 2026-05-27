@@ -369,6 +369,9 @@ document.getElementById('payment-cancel').addEventListener('click', () => {
 });
 
 // --- UNLOCKED ---
+let unlockedRanked = [];        // отсортированный список ключей с rank
+let unlockedFilter = 'all';     // 'all' | 'top3' | 'top10'
+
 function renderUnlocked(state) {
   show('unlocked');
   document.getElementById('unlocked-app').innerHTML = appCardHtml(state);
@@ -376,20 +379,45 @@ function renderUnlocked(state) {
   document.getElementById('u-ranked').textContent = s.rankedKeywords;
   document.getElementById('u-top3').textContent = s.top3;
   document.getElementById('u-top10').textContent = s.top10;
-  const ranked = (state.keywords || []).filter((k) => k.rank != null);
+  unlockedRanked = (state.keywords || []).filter((k) => k.rank != null);
+  unlockedFilter = 'all';
+  renderKwTable();
+}
+
+function renderKwTable() {
   const list = document.getElementById('kw-list');
-  if (!ranked.length) {
-    list.innerHTML = '<p class="muted" style="padding:14px;text-align:center">'
-      + 'No keyword rankings found.</p>';
+  // Подсветка активного тайла.
+  ['ranked', 'top3', 'top10'].forEach((f) => {
+    const map = { ranked: 'all', top3: 'top3', top10: 'top10' };
+    document.getElementById('u-tile-' + f)
+      .classList.toggle('active', unlockedFilter === map[f]);
+  });
+  let rows = unlockedRanked;
+  if (unlockedFilter === 'top3') rows = rows.filter((k) => k.rank <= 3);
+  else if (unlockedFilter === 'top10') rows = rows.filter((k) => k.rank <= 10);
+
+  if (!rows.length) {
+    const msg = unlockedFilter === 'top3' ? 'No keywords in Top 3.'
+      : unlockedFilter === 'top10' ? 'No keywords in Top 10.'
+        : 'No keyword rankings found.';
+    list.innerHTML = `<p class="muted" style="padding:14px;text-align:center">${msg}</p>`;
     return;
   }
   list.innerHTML = `<table>
     <thead><tr><th>Keyword</th><th class="num">Rank</th></tr></thead>
-    <tbody>${ranked.map((k) => `<tr>
+    <tbody>${rows.map((k) => `<tr>
       <td>${k.term}</td>
       <td class="num ${k.rank <= 10 ? 'rank-top' : ''}">#${k.rank}</td>
     </tr>`).join('')}</tbody></table>`;
 }
+
+function setKwFilter(f) {
+  unlockedFilter = unlockedFilter === f ? 'all' : f;
+  renderKwTable();
+}
+document.getElementById('u-tile-ranked').addEventListener('click', () => setKwFilter('all'));
+document.getElementById('u-tile-top3').addEventListener('click', () => setKwFilter('top3'));
+document.getElementById('u-tile-top10').addEventListener('click', () => setKwFilter('top10'));
 
 document.getElementById('download-btn').addEventListener('click', downloadExcel);
 
