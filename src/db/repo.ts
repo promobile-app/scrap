@@ -296,3 +296,30 @@ export async function upsertCachedKeyword(
      data.totalResults, data.volume, data.difficulty],
   );
 }
+
+/** Постоянный словарь «кандидатных ключей» для приложения в стране. */
+export async function getAppCandidateKeywords(
+  platform: string, appId: string, country: string,
+): Promise<string[]> {
+  const rows = await query<{ term: string }>(
+    `SELECT term FROM app_candidate_keywords
+     WHERE platform = $1 AND app_id = $2 AND country = $3`,
+    [platform, appId, country],
+  );
+  return rows.map((r) => r.term);
+}
+
+export async function saveAppCandidateKeywords(
+  platform: string, appId: string, country: string, terms: string[],
+): Promise<void> {
+  if (terms.length === 0) return;
+  // Один батч-INSERT с UNNEST: быстрее и удобнее, чем цикл.
+  await query(
+    `INSERT INTO app_candidate_keywords (platform, app_id, country, term)
+     SELECT $1, $2, $3, t
+     FROM UNNEST($4::text[]) AS t
+     ON CONFLICT (platform, app_id, country, term)
+     DO UPDATE SET last_seen_at = now()`,
+    [platform, appId, country, terms],
+  );
+}

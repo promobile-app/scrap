@@ -10,6 +10,7 @@
     "scrape": "tsx src/cli.ts",
     "scheduler": "tsx src/jobs/scheduler.ts",
     "db:migrate": "tsx src/db/migrate.ts",
+    "import-xlsx": "tsx src/importXlsx.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

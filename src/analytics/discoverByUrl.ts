@@ -5,8 +5,13 @@ import { parseStoreUrl } from '../scrapers/storeUrl.js';
 import {
   createDiscoveryJob, getDiscoveryJob, latestDiscoveryJob, updateDiscoveryJob,
   getCachedKeyword, upsertCachedKeyword,
+  getAppCandidateKeywords, saveAppCandidateKeywords,
   type DiscoveryJobRow,
 } from '../db/repo.js';
+
+// Сколько уже сохранённых кандидатов нужно, чтобы пропустить дорогой BFS-этап
+// (генерацию терминов из метаданных / suggestions / конкурентов).
+const SKIP_BFS_THRESHOLD = 10;
 
 // --- Очередь подборов: лимит параллельных задач --------------------------
 const MAX_CONCURRENT_JOBS = Number(process.env.MAX_CONCURRENT_JOBS ?? 4);
@@ -346,44 +351,59 @@ async function runJob(
     let relevantTokens: Set<string> = new Set();
     const appCache = new Map<string, GpAppInfo | null>();
 
+    // Сначала проверяем постоянный словарь кандидатов для этой пары
+    // (platform, appId, country). Если уже есть достаточный набор —
+    // пропускаем дорогой BFS-этап и сразу идём мерить ранки.
+    const persisted = await getAppCandidateKeywords(platform, appId, country)
+      .catch(() => [] as string[]);
+    const useCached = persisted.length >= SKIP_BFS_THRESHOLD;
+
     if (platform === 'android') {
       const app = await gpAppLookup(appId, country);
       if (!app) throw new Error('Приложение не найдено в Google Play для этого гео');
       title = app.title;
-      const competitors = await gpSearch(app.title, country, 20).catch(() => []);
-      const competitorTitles = competitors
-        .filter((c) => c.appId !== appId)
-        .slice(0, 10)
-        .map((c) => c.title);
-      const desc = `${app.summary} ${app.description}`.trim();
-      const built = await buildCandidates(
-        app.title, app.genre, country, 'android', desc, competitorTitles,
-      );
-      candidates = built.candidates;
-      relevantTokens = built.relevantTokens;
+      if (useCached) {
+        candidates = persisted;
+      } else {
+        const competitors = await gpSearch(app.title, country, 20).catch(() => []);
+        const competitorTitles = competitors
+          .filter((c) => c.appId !== appId)
+          .slice(0, 10)
+          .map((c) => c.title);
+        const desc = `${app.summary} ${app.description}`.trim();
+        const built = await buildCandidates(
+          app.title, app.genre, country, 'android', desc, competitorTitles,
+        );
+        candidates = built.candidates;
+        relevantTokens = built.relevantTokens;
+      }
     } else {
       const app = await appLookup(Number(appId), country);
       if (!app) throw new Error('Приложение не найдено в App Store для этого гео');
       title = app.title;
-      const competitorIds = await nativeSearchIds(app.title, country).catch(() => []);
-      const competitors = competitorIds.length
-        ? await lookupApps(
-            competitorIds.filter((id) => id !== String(appId)).slice(0, 10),
-            country,
-          ).catch(() => [])
-        : [];
-      const competitorTitles = competitors.map((c) => c.title);
-      const genres = (app.genres ?? []).join(' ');
-      const built = await buildCandidates(
-        app.title,
-        `${app.primaryGenre} ${genres}`,
-        country,
-        'ios',
-        app.description,
-        competitorTitles,
-      );
-      candidates = built.candidates;
-      relevantTokens = built.relevantTokens;
+      if (useCached) {
+        candidates = persisted;
+      } else {
+        const competitorIds = await nativeSearchIds(app.title, country).catch(() => []);
+        const competitors = competitorIds.length
+          ? await lookupApps(
+              competitorIds.filter((id) => id !== String(appId)).slice(0, 10),
+              country,
+            ).catch(() => [])
+          : [];
+        const competitorTitles = competitors.map((c) => c.title);
+        const genres = (app.genres ?? []).join(' ');
+        const built = await buildCandidates(
+          app.title,
+          `${app.primaryGenre} ${genres}`,
+          country,
+          'ios',
+          app.description,
+          competitorTitles,
+        );
+        candidates = built.candidates;
+        relevantTokens = built.relevantTokens;
+      }
     }
     await updateDiscoveryJob(jobId, { appTitle: title, total: candidates.length });
 
@@ -452,11 +472,24 @@ async function runJob(
       throw new Error('Магазин ограничил запросы — не удалось получить выдачу. Попробуйте позже.');
     }
 
+    // Если кандидаты пришли из кэша — фильтр по relevantTokens пропускаем,
+    // они уже были отфильтрованы при первом прогоне.
+    const finalKeywords = useCached
+      ? sortKeywords([...found])
+      : sortKeywords(filterSignal([...found], relevantTokens));
+
     await updateDiscoveryJob(jobId, {
       status: 'done',
       processed: candidates.length,
-      keywords: sortKeywords(filterSignal([...found], relevantTokens)),
+      keywords: finalKeywords,
     });
+
+    // Сохраняем в постоянный словарь, чтобы следующий пользователь не повторял BFS.
+    // Берём только термы, прошедшие финальный фильтр (relevant + sorted).
+    const termsToPersist = finalKeywords.map((k) => k.term);
+    if (termsToPersist.length > 0) {
+      saveAppCandidateKeywords(platform, appId, country, termsToPersist).catch(() => {});
+    }
   } catch (e) {
     await updateDiscoveryJob(jobId, {
       status: 'error',
