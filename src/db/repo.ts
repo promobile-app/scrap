@@ -105,6 +105,35 @@ export async function saveMetricCheck(m: MetricCheck): Promise<void> {
   );
 }
 
+/**
+ * Батч-вставка снимков по списку ключей одного приложения.
+ * Один INSERT-запрос вместо N — нужно для discovery (200–300 ключей за раз).
+ */
+export async function saveMetricCheckBatch(
+  meta: { platform: string; appId: string; appTitle: string; country: string; language: string | null },
+  keywords: { term: string; rank: number | null; totalResults: number; volume: number; difficulty: number }[],
+): Promise<void> {
+  if (keywords.length === 0) return;
+  // UNNEST на массивах: быстрее и читабельнее, чем 300 плейсхолдеров вручную.
+  await query(
+    `INSERT INTO metric_checks
+       (platform, app_id, app_title, term, country, language,
+        rank, total_results, volume, difficulty)
+     SELECT $1, $2, $3, t.term, $4, $5, t.rank, t.total_results, t.volume, t.difficulty
+     FROM UNNEST(
+       $6::text[], $7::int[], $8::int[], $9::int[], $10::int[]
+     ) AS t(term, rank, total_results, volume, difficulty)`,
+    [
+      meta.platform, meta.appId, meta.appTitle, meta.country, meta.language,
+      keywords.map((k) => k.term),
+      keywords.map((k) => k.rank),
+      keywords.map((k) => k.totalResults),
+      keywords.map((k) => k.volume),
+      keywords.map((k) => k.difficulty),
+    ],
+  );
+}
+
 /** Уникальные связки «приложение + ключ», которые уже проверялись — для автозамера. */
 export async function distinctMetricTargets(): Promise<
   {

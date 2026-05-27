@@ -6,6 +6,7 @@ import {
   createDiscoveryJob, getDiscoveryJob, latestDiscoveryJob, updateDiscoveryJob,
   getCachedKeyword, upsertCachedKeyword,
   getAppCandidateKeywords, saveAppCandidateKeywords,
+  saveMetricCheckBatch,
   type DiscoveryJobRow,
 } from '../db/repo.js';
 
@@ -489,6 +490,21 @@ async function runJob(
     const termsToPersist = finalKeywords.map((k) => k.term);
     if (termsToPersist.length > 0) {
       saveAppCandidateKeywords(platform, appId, country, termsToPersist).catch(() => {});
+    }
+
+    // Снимок истории — по строке на каждый ключ для будущих чартов
+    // (rank/volume/difficulty/results во времени).
+    if (finalKeywords.length > 0) {
+      saveMetricCheckBatch(
+        { platform, appId, appTitle: title, country, language: null },
+        finalKeywords.map((k) => ({
+          term: k.term,
+          rank: k.rank,
+          totalResults: k.totalResults,
+          volume: k.volume,
+          difficulty: k.difficulty,
+        })),
+      ).catch(() => {});
     }
   } catch (e) {
     await updateDiscoveryJob(jobId, {
