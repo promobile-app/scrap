@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "RankRadar — ASO keyword analyzer",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "ASO keyword analytics for any app on Apple App Store or Google Play — in one click from the store page.",
   "icons": {
     "16": "icon16.png",

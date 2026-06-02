@@ -291,7 +291,9 @@ async function pollJob() {
 function handleJobState(state) {
   if (state.status === 'pending' || state.status === 'running') {
     setProgress(state);
-    pollAnalysisTimer = setTimeout(pollJob, 3000);
+    // Бэкенд ускорен (кэш app-info + пул слотов) — джоб обновляется чаще,
+    // поэтому поллим живее для отзывчивого прогресс-бара.
+    pollAnalysisTimer = setTimeout(pollJob, 1500);
     return;
   }
   if (state.status === 'error') {

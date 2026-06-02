@@ -1,4 +1,4 @@
-import { appLookup, lookupApps, suggest } from '../scrapers/appstore.js';
+import { appLookup, lookupApps, lookupAppsCached, suggest } from '../scrapers/appstore.js';
 import { nativeSearchIds } from '../scrapers/native.js';
 import { gpAppLookup, gpSearch, gpSuggest, type GpAppInfo } from '../scrapers/googleplay.js';
 import { parseStoreUrl } from '../scrapers/storeUrl.js';
@@ -55,8 +55,14 @@ export interface DiscoveryJobState {
   cached?: boolean;
 }
 
-// Сколько ключей-кандидатов набираем максимум.
-const MAX_KEYWORDS = 1000;
+// Сколько ключей-кандидатов набираем максимум. Снижено с 1000 до 300:
+// на каждый кандидат идёт замер ранка (запрос к Apple), а хвост за ~300
+// почти не добавляет релевантных ключей, зато сильно растягивает время.
+// Тюнится через MAX_KEYWORDS.
+const MAX_KEYWORDS = Number(process.env.MAX_KEYWORDS ?? 300);
+// Глубина BFS-расширения через autocomplete. Снижено с 3 до 2 — третий
+// уровень почти не приносит релевантных ключей, но множит suggest-запросы.
+const BFS_MAX_DEPTH = Number(process.env.BFS_MAX_DEPTH ?? 2);
 // Готовый результат считаем свежим в течение 6 часов.
 const DONE_TTL_MS = 6 * 60 * 60 * 1000;
 // Задача без прогресса дольше 3 минут считается «зависшей».
@@ -211,10 +217,9 @@ async function buildCandidates(
 
   let frontier = [...seeds];
   let depth = 0;
-  const MAX_DEPTH = 3;
   const FRONTIER_LIMIT = 100;
 
-  while (candidates.size < MAX_KEYWORDS && frontier.length > 0 && depth < MAX_DEPTH) {
+  while (candidates.size < MAX_KEYWORDS && frontier.length > 0 && depth < BFS_MAX_DEPTH) {
     const hintLists = await mapLimit(frontier, 8, (term) =>
       suggestFn(term, country).catch(() => [] as string[]),
     );
@@ -293,7 +298,9 @@ async function cachedKeyword(
 async function iosKeywordData(term: string, country: string): Promise<KeywordData> {
   return cachedKeyword('ios', country, term, async () => {
     const ids = await nativeSearchIds(term, country);
-    const top = await lookupApps(ids.slice(0, 10), country);
+    // Кэшированный lookup: топовые приложения повторяются между ключами,
+    // поэтому повторные id не порождают новых запросов к iTunes.
+    const top = await lookupAppsCached(ids.slice(0, 10), country);
     return {
       ids,
       totalResults: ids.length,

@@ -87,6 +87,47 @@ export async function lookupApps(
   return ids.map((id) => byId.get(String(id))).filter((a): a is AppInfo => Boolean(a));
 }
 
+// --- LRU+TTL кэш метаданных приложений (id→AppInfo, по странам) -------------
+// Топовые приложения сильно пересекаются между ключевыми словами, поэтому
+// при подборе ключей одни и те же id запрашивались заново на каждый ключ.
+// Кэш дедуплицирует их, а lookupAppsCached батчит только промахи.
+const APP_INFO_TTL_MS = 6 * 60 * 60 * 1000;
+const APP_INFO_MAX = 20000;
+const appInfoCache = new Map<string, { value: AppInfo; expires: number }>();
+
+function appCacheGet(country: string, id: string): AppInfo | undefined {
+  const e = appInfoCache.get(`${country}|${id}`);
+  if (!e) return undefined;
+  if (Date.now() > e.expires) { appInfoCache.delete(`${country}|${id}`); return undefined; }
+  return e.value;
+}
+function appCacheSet(country: string, info: AppInfo): void {
+  if (appInfoCache.size >= APP_INFO_MAX) {
+    const oldest = appInfoCache.keys().next().value;
+    if (oldest !== undefined) appInfoCache.delete(oldest);
+  }
+  appInfoCache.set(`${country}|${info.appId}`, { value: info, expires: Date.now() + APP_INFO_TTL_MS });
+}
+
+/**
+ * Как lookupApps, но с кэшем: повторно тянет из iTunes только те id,
+ * которых нет в кэше (батчами до 200). Порядок выдачи сохраняется.
+ */
+export async function lookupAppsCached(
+  ids: (number | string)[],
+  country = config.defaultCountry,
+): Promise<AppInfo[]> {
+  if (ids.length === 0) return [];
+  const missing = [...new Set(ids.map(String))].filter((id) => !appCacheGet(country, id));
+  for (let i = 0; i < missing.length; i += 200) {
+    const fetched = await lookupApps(missing.slice(i, i + 200), country);
+    for (const a of fetched) appCacheSet(country, a);
+  }
+  return ids
+    .map((id) => appCacheGet(country, String(id)))
+    .filter((a): a is AppInfo => Boolean(a));
+}
+
 /**
  * Поисковая выдача App Store по ключевому слову.
  * Использует нативный поиск (полная ранжированная выдача), затем
