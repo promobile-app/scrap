@@ -65,6 +65,9 @@ const MAX_KEYWORDS = Number(process.env.MAX_KEYWORDS ?? 300);
 const BFS_MAX_DEPTH = Number(process.env.BFS_MAX_DEPTH ?? 2);
 // Готовый результат считаем свежим в течение 6 часов.
 const DONE_TTL_MS = 6 * 60 * 60 * 1000;
+// Кэш-хит отдаём мгновенно, но если данные старше этого порога — в фоне
+// перезамеряем и сохраняем новый снимок (история в metric_checks не застаивается).
+const REFRESH_AFTER_MS = Number(process.env.REFRESH_AFTER_MS ?? 30 * 60 * 1000);
 // Задача без прогресса дольше 3 минут считается «зависшей».
 const STALE_MS = 3 * 60 * 1000;
 // Сколько максимум держим задачу в очереди (pending) до новой попытки.
@@ -524,6 +527,31 @@ async function runJob(
   }
 }
 
+// Дедуп одновременных фоновых рефрешей по ключу (в пределах процесса).
+const refreshingKeys = new Set<string>();
+
+/**
+ * Фоновый перезамер: создаёт новую задачу и прогоняет её, не блокируя ответ
+ * пользователю. Нужен, чтобы повторный анализ уже известного app+гео всё
+ * равно сохранял свежий снимок (metric_checks + словарь кандидатов).
+ */
+function backgroundRefresh(
+  jobKey: string, platform: 'ios' | 'android', appId: string, country: string,
+): void {
+  if (refreshingKeys.has(jobKey)) return;
+  refreshingKeys.add(jobKey);
+  void (async () => {
+    try {
+      const job = await createDiscoveryJob(jobKey, platform, appId, country);
+      await runJobQueued(job.id, platform, appId, country);
+    } catch {
+      // фоновый рефреш — ошибки не должны влиять на пользователя
+    } finally {
+      refreshingKeys.delete(jobKey);
+    }
+  })();
+}
+
 /**
  * Запускает (или возвращает уже идущую/готовую) фоновую задачу подбора ключей
  * по ссылке на приложение в App Store / Google Play.
@@ -538,6 +566,9 @@ export async function startDiscoveryJob(
   if (existing) {
     const age = Date.now() - new Date(existing.updatedAt).getTime();
     if (!force && existing.status === 'done' && age < DONE_TTL_MS) {
+      // Кэш + фоновый рефреш: отдаём готовое мгновенно, а если данные не
+      // совсем свежие — в фоне перезамеряем и сохраняем новый снимок.
+      if (age > REFRESH_AFTER_MS) backgroundRefresh(jobKey, platform, appId, country);
       return { ...rowToState(existing), cached: true };
     }
     if (existing.status === 'running' && age < STALE_MS) {

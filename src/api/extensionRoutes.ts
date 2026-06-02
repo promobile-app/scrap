@@ -9,6 +9,7 @@ import { query } from '../db/pool.js';
 import {
   startDiscoveryJob, getDiscoveryJobState,
 } from '../analytics/discoverByUrl.js';
+import { getDiscoveryJobLite } from '../db/repo.js';
 
 const TOKEN_TTL = '30d';
 

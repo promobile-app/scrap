@@ -19,7 +19,7 @@ import {
 import {
   upsertApp, upsertKeyword, linkAppKeyword,
   saveMetricCheck, getMetricHistory, distinctMetricTargets,
-  allDoneDiscoveryJobs,
+  allDoneDiscoveryJobs, failStaleDiscoveryJobs,
 } from '../db/repo.js';
 import { registerExtensionRoutes } from './extensionRoutes.js';
 
@@ -189,14 +189,32 @@ app.get<{
 });
 
 // Все сохранённые связки «приложение + ключ» с их историей (для дашборда).
+// Один запрос с json_agg вместо N+1 к БД.
 app.get('/history/all', async () => {
-  const targets = await distinctMetricTargets();
-  const items = [];
-  for (const t of targets) {
-    const history = await getMetricHistory(t.platform, t.appId, t.term, t.country);
-    items.push({ ...t, history });
-  }
-  return { items };
+  const rows = await query<{
+    platform: string;
+    appId: string;
+    appTitle: string;
+    term: string;
+    country: string;
+    language: string | null;
+    history: Array<{ rank: number | null; totalResults: number; volume: number; capturedAt: string }>;
+  }>(
+    `SELECT platform, app_id AS "appId", term, country, language,
+            COALESCE(app_title, '') AS "appTitle",
+            COALESCE(
+              json_agg(
+                json_build_object(
+                  'rank', rank, 'totalResults', total_results,
+                  'volume', volume, 'capturedAt', captured_at
+                ) ORDER BY captured_at
+              ) FILTER (WHERE rank IS NOT NULL OR total_results IS NOT NULL),
+              '[]'::json
+            ) AS history
+     FROM metric_checks
+     GROUP BY platform, app_id, app_title, term, country, language`,
+  );
+  return { items: rows };
 });
 
 // FoxData-флоу: приложение + гео -> ключевые слова с позициями.
@@ -341,9 +359,11 @@ app.post<{
     }),
   );
 
-  // Один поиск на ключ; внутри ищем позиции всех приложений.
-  const rows = [];
-  for (const term of keywords) {
+  // Параллельно по ключам (concurrency=8). Apple channel pool внутри
+  // nativeSearchIds сам разрулит slot-throttling.
+  const rows = await mapLimit(keywords, 8, async (term): Promise<{
+    term: string; totalResults: number; volume: number; ranks: (number | null)[];
+  }> => {
     try {
       const ids = android
         ? (await gpSearch(term, country, 250)).map((a) => a.appId)
@@ -353,30 +373,54 @@ app.post<{
         const idx = ids.indexOf(String(id));
         return idx === -1 ? null : idx + 1;
       });
-      rows.push({ term, totalResults: ids.length, volume: vol, ranks });
+      return { term, totalResults: ids.length, volume: vol, ranks };
+    } catch {
+      return { term, totalResults: 0, volume: 0, ranks: appIds.map(() => null) };
+    }
+  });
 
-      // Каждая ячейка таблицы — это замер «приложение + ключ»: пишем в историю.
-      for (let i = 0; i < appIds.length; i++) {
-        await saveMetricCheck({
+  // Параллельная запись снимков. Дальнейшее ускорение — батч через UNNEST
+  // (saveMetricCheckBatch) — следующий шаг. Сейчас экономим на сетевом
+  // round-trip за счёт конкурентных INSERT'ов в одном пуле соединений.
+  await Promise.all(
+    rows.flatMap((row) =>
+      appIds.map((id, i) =>
+        saveMetricCheck({
           platform: android ? 'android' : 'ios',
-          appId: String(appIds[i]),
+          appId: String(id),
           appTitle: apps[i]!.title,
-          term: term.toLowerCase().trim(),
+          term: row.term.toLowerCase().trim(),
           country,
           language: android ? null : (language ?? null),
-          rank: ranks[i]!,
-          totalResults: ids.length,
-          volume: vol,
+          rank: row.ranks[i]!,
+          totalResults: row.totalResults,
+          volume: row.volume,
           difficulty: 0,
-        }).catch(() => {});
-      }
-    } catch {
-      rows.push({ term, totalResults: 0, volume: 0, ranks: appIds.map(() => null) });
-    }
-  }
+        }).catch(() => {}),
+      ),
+    ),
+  );
 
   return { platform: android ? 'android' : 'ios', country, apps, rows };
 });
+
+// Локальный мини-p-limit — параллельный map с лимитом concurrency.
+async function mapLimit<T, R>(
+  items: T[], limit: number, fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let cursor = 0;
+  async function worker(): Promise<void> {
+    while (cursor < items.length) {
+      const idx = cursor++;
+      out[idx] = await fn(items[idx]);
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker()),
+  );
+  return out;
+}
 
 // --- Ключевое слово ---------------------------------------------------------
 
@@ -459,6 +503,12 @@ app.get<{ Querystring: { country?: string } }>('/languages', async (req) => {
 app.get('/health', async () => ({ ok: true }));
 
 await registerExtensionRoutes(app);
+
+// Восстановление осиротевших задач подбора: джобы, прерванные предыдущим
+// рестартом/крэшем, остаются 'running' навсегда — помечаем их error при старте.
+await failStaleDiscoveryJobs(5)
+  .then((n) => { if (n) app.log.info(`failStaleDiscoveryJobs: помечено error ${n}`); })
+  .catch((e) => app.log.warn(e));
 
 app
   .listen({ port: config.port, host: '0.0.0.0' })

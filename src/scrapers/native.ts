@@ -6,6 +6,12 @@ import { config } from '../config.js';
  * Нативный поиск App Store — тот же endpoint, что использует приложение
  * App Store на iPhone. В отличие от legacy iTunes Search API отдаёт
  * полную ранжированную выдачу (200+ позиций) в pageData.bubbles.
+ *
+ * Channel pool: каждый канал = свой device GUID + свой slot-throttle.
+ * Round-robin между каналами даёт ×N throughput, где N = число каналов,
+ * потому что Apple видит запросы с разных «устройств» с интервалом
+ * `scrapeDelayMs` (а не один общий слот). Число каналов можно крутить
+ * через APPLE_CHANNELS (default 4).
  */
 
 /**
@@ -46,6 +52,67 @@ const NATIVE_UA =
 
 const SEARCH_URL = 'https://search.itunes.apple.com/WebObjects/MZSearch.woa/wa/search';
 
+// --- Channel pool ----------------------------------------------------------
+// Один канал = «виртуальное устройство» со своим GUID. Round-robin между
+// каналами позволяет параллельно слать несколько запросов в Apple с
+// разными «отпечатками» — slot-throttle на каждом канале свой.
+
+class AppleChannel {
+  readonly guid: string;
+  nextSlotAt = 0;
+  inFlight = 0;
+
+  constructor() {
+    this.guid = randomBytes(6).toString('hex').toUpperCase();
+  }
+
+  async waitSlot(): Promise<void> {
+    const now = Date.now();
+    const slot = Math.max(now, this.nextSlotAt);
+    this.nextSlotAt = slot + config.scrapeDelayMs;
+    if (slot > now) await sleep(slot - now);
+  }
+
+  /** При 429/403 — увеличенный backoff на этом канале, чтобы притормозить
+   *  и остальные worker'ы, использующие тот же канал. */
+  bumpPenalty(ms = 8000): void {
+    this.nextSlotAt = Math.max(this.nextSlotAt, Date.now() + ms);
+  }
+
+  acquire(): void { this.inFlight++; }
+  release(): void { this.inFlight = Math.max(0, this.inFlight - 1); }
+}
+
+const CHANNEL_COUNT = Number(process.env.APPLE_CHANNELS ?? 4);
+const CHANNELS: AppleChannel[] = Array.from({ length: CHANNEL_COUNT }, () => new AppleChannel());
+
+// Round-robin: берём канал с минимальным inFlight, чтобы нагрузка
+// распределялась равномерно (а не «канал 0, канал 0, канал 1, ...»).
+let channelCursor = 0;
+function pickChannel(): AppleChannel {
+  // Сначала ищем полностью свободный канал; если все заняты — round-robin.
+  let best: AppleChannel | null = null;
+  for (let i = 0; i < CHANNELS.length; i++) {
+    const c = CHANNELS[(channelCursor + i) % CHANNELS.length]!;
+    if (c.inFlight === 0) { best = c; channelCursor = (channelCursor + i + 1) % CHANNELS.length; break; }
+  }
+  const ch = best ?? CHANNELS[channelCursor]!;
+  channelCursor = (channelCursor + 1) % CHANNELS.length;
+  ch.acquire();
+  return ch;
+}
+
+/** Берёт канал, ждёт его slot и возвращает. Освобождение — releaseChannel(). */
+async function acquireChannel(): Promise<AppleChannel> {
+  const ch = pickChannel();
+  await ch.waitSlot();
+  return ch;
+}
+
+function releaseChannel(ch: AppleChannel): void {
+  ch.release();
+}
+
 /** Собирает значение X-Apple-Store-Front для страны и (опц.) языка витрины. */
 function storeFront(country: string, language?: string): string {
   const sf = STOREFRONTS[country.toLowerCase()] ?? STOREFRONTS.us!;
@@ -56,16 +123,6 @@ function storeFront(country: string, language?: string): string {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-// Слот-троттлинг: каждый вызов резервирует следующий временной слот.
-// Так параллельные вызовы не уходят к Apple пачкой (иначе — 429/403).
-let nextSlotAt = 0;
-async function throttleSlot(): Promise<void> {
-  const now = Date.now();
-  const slot = Math.max(now, nextSlotAt);
-  nextSlotAt = slot + config.scrapeDelayMs;
-  if (slot > now) await sleep(slot - now);
-}
 
 interface NativeSearchResponse {
   pageData?: {
@@ -84,12 +141,12 @@ export async function nativeSearchIds(
 ): Promise<string[]> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < config.scrapeMaxRetries; attempt++) {
-    await throttleSlot();
+    const channel = await acquireChannel();
     try {
       const url = new URL(SEARCH_URL);
       url.searchParams.set('clientApplication', 'Software');
       url.searchParams.set('term', term);
-      url.searchParams.set('guid', DEVICE_GUID);
+      url.searchParams.set('guid', channel.guid);
 
       const headers = {
         'X-Apple-Store-Front': `${storeFront(country, language)} t:native`,
@@ -116,11 +173,13 @@ export async function nativeSearchIds(
         .map((r) => r.id);
     } catch (err) {
       lastErr = err;
-      // При 429/403 (ограничение Apple) — увеличенная пауза + сдвиг общего слота,
-      // чтобы притормозить и остальные параллельные запросы.
+      // При 429/403 (ограничение Apple) — увеличенная пауза на этом канале,
+      // чтобы притормозить и остальные worker'ы на нём.
       const throttled = /HTTP (429|403)/.test(String(err));
-      if (throttled) nextSlotAt = Math.max(nextSlotAt, Date.now() + 8000);
+      if (throttled) channel.bumpPenalty();
       await sleep((throttled ? 4000 : 500) * 2 ** attempt + Math.random() * 400);
+    } finally {
+      releaseChannel(channel);
     }
   }
   throw new Error(`nativeSearchIds failed: ${String(lastErr)}`);
