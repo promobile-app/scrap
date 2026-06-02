@@ -7,19 +7,45 @@ const USER_AGENTS = [
   'iTunes-AppStore/1.0',
 ];
 
-let lastRequestAt = 0;
-
 function pickUserAgent(): string {
   return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)]!;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Троттлинг: выдерживаем минимальную паузу между запросами. */
-async function throttle(): Promise<void> {
-  const wait = config.scrapeDelayMs - (Date.now() - lastRequestAt);
-  if (wait > 0) await sleep(wait);
-  lastRequestAt = Date.now();
+// --- Slot pool --------------------------------------------------------------
+// Раньше тут был ОДИН глобальный lastRequestAt: throttle() держал паузу
+// scrapeDelayMs между любыми двумя запросами на весь процесс. Из-за этого
+// concurrency в вызывающем коде была бесполезна — suggest()/lookupApps()
+// сериализовались в ~1 запрос / scrapeDelayMs.
+//
+// Теперь — пул из HTTP_CHANNELS слотов: каждый со своим расписанием, так что
+// одновременно «в полёте» может быть до N запросов с интервалом scrapeDelayMs
+// на слот → ×N throughput. Round-robin берёт наименее загруженный слот.
+const HTTP_CHANNELS = Number(process.env.HTTP_CHANNELS ?? 4);
+const slots = Array.from({ length: HTTP_CHANNELS }, () => ({ nextAt: 0, inFlight: 0 }));
+let slotCursor = 0;
+
+/** Берёт наименее загруженный слот, ждёт его паузу и возвращает индекс. */
+async function acquireSlot(): Promise<number> {
+  let idx = slotCursor;
+  for (let i = 0; i < slots.length; i++) {
+    const c = (slotCursor + i) % slots.length;
+    if (slots[c]!.inFlight === 0) { idx = c; break; }
+    if (slots[c]!.nextAt < slots[idx]!.nextAt) idx = c;
+  }
+  slotCursor = (idx + 1) % slots.length;
+  const s = slots[idx]!;
+  s.inFlight++;
+  const now = Date.now();
+  const at = Math.max(now, s.nextAt);
+  s.nextAt = at + config.scrapeDelayMs;
+  if (at > now) await sleep(at - now);
+  return idx;
+}
+
+function releaseSlot(idx: number): void {
+  slots[idx]!.inFlight = Math.max(0, slots[idx]!.inFlight - 1);
 }
 
 export interface FetchOptions {
@@ -36,7 +62,7 @@ export async function fetchJson<T = unknown>(url: string, opts: FetchOptions = {
 
   let lastErr: unknown;
   for (let attempt = 0; attempt < config.scrapeMaxRetries; attempt++) {
-    await throttle();
+    const slot = await acquireSlot();
     try {
       const res = await request(fullUrl, {
         method: 'GET',
@@ -52,6 +78,8 @@ export async function fetchJson<T = unknown>(url: string, opts: FetchOptions = {
     } catch (err) {
       lastErr = err;
       await sleep(500 * 2 ** attempt + Math.random() * 300);
+    } finally {
+      releaseSlot(slot);
     }
   }
   throw new Error(`fetchJson failed after ${config.scrapeMaxRetries} attempts: ${String(lastErr)}`);
@@ -66,7 +94,7 @@ export async function fetchText(url: string, opts: FetchOptions = {}): Promise<s
 
   let lastErr: unknown;
   for (let attempt = 0; attempt < config.scrapeMaxRetries; attempt++) {
-    await throttle();
+    const slot = await acquireSlot();
     try {
       const res = await request(fullUrl, {
         method: 'GET',
@@ -78,6 +106,8 @@ export async function fetchText(url: string, opts: FetchOptions = {}): Promise<s
     } catch (err) {
       lastErr = err;
       await sleep(500 * 2 ** attempt + Math.random() * 300);
+    } finally {
+      releaseSlot(slot);
     }
   }
   throw new Error(`fetchText failed after ${config.scrapeMaxRetries} attempts: ${String(lastErr)}`);
