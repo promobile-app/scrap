@@ -38,6 +38,45 @@ function words(s: string): string[] {
     .filter((w) => w.length >= 3 && !STOP_WORDS.has(w));
 }
 
+/** Параллельный map с ограничением concurrency (как p-limit). */
+async function mapLimit<T, R>(
+  items: T[], limit: number, fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let cursor = 0;
+  async function worker(): Promise<void> {
+    while (cursor < items.length) {
+      const idx = cursor++;
+      out[idx] = await fn(items[idx]);
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker()),
+  );
+  return out;
+}
+
+// In-memory TTL cache для выдачи по ключу. Сбрасывается при рестарте,
+// но в пределах одного анализа / дашборд-сессии экономим N Apple-запросов
+// когда пользователь быстро переключается между ключами.
+const CACHE_TTL_MS = 5 * 60 * 1000;
+const CACHE_MAX = 2000;
+const idsCache = new Map<string, { value: string[]; expires: number }>();
+
+function cacheGet(key: string): string[] | undefined {
+  const e = idsCache.get(key);
+  if (!e) return undefined;
+  if (Date.now() > e.expires) { idsCache.delete(key); return undefined; }
+  return e.value;
+}
+function cacheSet(key: string, value: string[]): void {
+  if (idsCache.size >= CACHE_MAX) {
+    const oldest = idsCache.keys().next().value;
+    if (oldest !== undefined) idsCache.delete(oldest);
+  }
+  idsCache.set(key, { value, expires: Date.now() + CACHE_TTL_MS });
+}
+
 /**
  * Генерация кандидатов ключевых слов для приложения.
  * Источники: название, жанр, autocomplete-расширения сид-слов,
@@ -58,9 +97,11 @@ async function buildCandidates(
     candidates.add(`${titleWords[i]} ${titleWords[i + 1]}`);
   }
 
-  // Расширения через autocomplete App Store.
-  for (const seed of seeds) {
-    const hints = await suggest(seed, country).catch(() => [] as string[]);
+  // Расширения через autocomplete App Store — параллельно (было последовательно).
+  const hintLists = await mapLimit(seeds, 4, (seed) =>
+    suggest(seed, country).catch(() => [] as string[]),
+  );
+  for (const hints of hintLists) {
     hints.slice(0, 5).forEach((h) => candidates.add(h));
   }
 
@@ -70,6 +111,9 @@ async function buildCandidates(
 /**
  * FoxData-стиль: по приложению и гео возвращает ключевые слова,
  * по которым приложение ранжируется, с позицией и оценкой объёма.
+ *
+ * Параллельно (concurrency=8) вместо последовательного цикла —
+ * ключевое ускорение Phase 1. С in-memory кэшем идемпотентно.
  */
 export async function discoverKeywords(
   appId: number,
@@ -80,22 +124,29 @@ export async function discoverKeywords(
 
   const candidates = await buildCandidates(app.title, app.primaryGenre, country);
 
-  const keywords: DiscoveredKeyword[] = [];
-  for (const term of candidates) {
-    try {
-      // Один запрос нативной выдачи на кандидата: полный список ID -> rank.
-      const ids = await nativeSearchIds(term, country);
+  // Параллельный сбор ранков: ×6-8 быстрее чем for-await.
+  // Apple channel pool в native.ts сам разрулит slot-throttling.
+  const keywords: DiscoveredKeyword[] = (
+    await mapLimit(candidates, 8, async (term): Promise<DiscoveredKeyword | null> => {
+      const cacheKey = `${country}|${term.toLowerCase()}`;
+      let ids = cacheGet(cacheKey);
+      if (!ids) {
+        try {
+          ids = await nativeSearchIds(term, country);
+          cacheSet(cacheKey, ids);
+        } catch {
+          return null;
+        }
+      }
       const idx = ids.indexOf(String(appId));
-      keywords.push({
+      return {
         term,
         rank: idx === -1 ? null : idx + 1,
         totalResults: ids.length,
         volumeScore: volumeFromResults(ids.length),
-      });
-    } catch {
-      // пропускаем сбойный кандидат
-    }
-  }
+      };
+    })
+  ).filter((k): k is DiscoveredKeyword => k !== null);
 
   // Сортировка: сначала где приложение в топе, затем по объёму.
   keywords.sort((a, b) => {

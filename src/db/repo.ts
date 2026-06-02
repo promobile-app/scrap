@@ -245,6 +245,38 @@ export async function getDiscoveryJob(id: number): Promise<DiscoveryJobRow | nul
   return rows[0] ?? null;
 }
 
+/**
+ * Лёгкая версия для polling: без колонки `keywords` (JSONB может быть
+ * тяжёлым — до 1000 элементов). Не нагружает БД на каждом 3-секундном
+ * опросе popup'а.
+ */
+export interface DiscoveryJobStateLite {
+  id: number;
+  jobKey: string;
+  platform: string;
+  appId: string;
+  appTitle: string | null;
+  country: string;
+  status: 'pending' | 'running' | 'done' | 'error';
+  total: number;
+  processed: number;
+  error: string | null;
+  updatedAt: string;
+}
+
+const JOB_COLS_LITE = `id, job_key AS "jobKey", platform, app_id AS "appId",
+  app_title AS "appTitle", country, status, total, processed, error,
+  updated_at AS "updatedAt"`;
+
+export async function getDiscoveryJobLite(
+  id: number,
+): Promise<DiscoveryJobStateLite | null> {
+  const rows = await query<DiscoveryJobStateLite>(
+    `SELECT ${JOB_COLS_LITE} FROM discovery_jobs WHERE id = $1`, [id],
+  );
+  return rows[0] ?? null;
+}
+
 export async function latestDiscoveryJob(jobKey: string): Promise<DiscoveryJobRow | null> {
   const rows = await query<DiscoveryJobRow>(
     `SELECT ${JOB_COLS} FROM discovery_jobs WHERE job_key = $1
@@ -274,6 +306,23 @@ export async function updateDiscoveryJob(
   }
   params.push(id);
   await query(`UPDATE discovery_jobs SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
+}
+
+/**
+ * Помечает зависшие задачи как error. Джоб, прерванный рестартом/крэшем
+ * процесса, умирает до кода смены статуса и навсегда остаётся 'running' —
+ * мешает кэш-логике и засоряет состояние. Вызывается при старте сервера.
+ */
+export async function failStaleDiscoveryJobs(olderThanMinutes = 5): Promise<number> {
+  const rows = await query<{ id: number }>(
+    `UPDATE discovery_jobs
+       SET status = 'error', error = 'interrupted (process restart)', updated_at = now()
+     WHERE status IN ('running', 'pending')
+       AND updated_at < now() - ($1 || ' minutes')::interval
+     RETURNING id`,
+    [String(olderThanMinutes)],
+  );
+  return rows.length;
 }
 
 /** Последняя завершённая задача подбора по каждому приложению. */
