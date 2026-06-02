@@ -362,8 +362,11 @@ async function runJob(
     // Сначала проверяем постоянный словарь кандидатов для этой пары
     // (platform, appId, country). Если уже есть достаточный набор —
     // пропускаем дорогой BFS-этап и сразу идём мерить ранки.
-    const persisted = await getAppCandidateKeywords(platform, appId, country)
-      .catch(() => [] as string[]);
+    // Обрезаем до MAX_KEYWORDS: словарь мог быть записан при старом лимите
+    // (напр. 1000) — иначе закэшированный путь игнорировал бы новый лимит и
+    // мерил бы все 600+ старых ключей.
+    const persisted = (await getAppCandidateKeywords(platform, appId, country)
+      .catch(() => [] as string[])).slice(0, MAX_KEYWORDS);
     const useCached = persisted.length >= SKIP_BFS_THRESHOLD;
 
     if (platform === 'android') {
