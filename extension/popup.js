@@ -383,6 +383,8 @@ let insightsReq = 0;            // токен против гонки при б�
 const I18N = {
   en: {
     goals: { rank_up: 'Rank up', expand: 'Expand', defend: 'Defend' },
+    download: '⬇ Download Excel', reanalyze: '↻ Re-analyze',
+    aiOn: 'AI', aiOff: 'rules',
     tbl: { keyword: 'Keyword', rank: 'Rank', demand: 'Demand', diff: 'Diff' },
     kwEmpty: { all: 'No keywords found.', ranked: 'No ranked keywords.', top3: 'No keywords in Top 3.', top10: 'No keywords in Top 10.' },
     quadCap: 'Quadrant', quadAxis: '· demand × difficulty',
@@ -395,6 +397,8 @@ const I18N = {
   },
   ru: {
     goals: { rank_up: 'Рост', expand: 'Охват', defend: 'Защита' },
+    download: '⬇ Скачать Excel', reanalyze: '↻ Пересчитать',
+    aiOn: 'AI', aiOff: 'правила',
     tbl: { keyword: 'Ключ', rank: 'Поз.', demand: 'Спрос', diff: 'Слож.' },
     kwEmpty: { all: 'Ключи не найдены.', ranked: 'Нет ранжированных ключей.', top3: 'Нет ключей в топ-3.', top10: 'Нет ключей в топ-10.' },
     quadCap: 'Квадрант', quadAxis: '· спрос × сложность',
@@ -509,6 +513,11 @@ function renderLangUI() {
   document.querySelectorAll('#lang-seg button').forEach((b) => {
     b.classList.toggle('active', b.dataset.lang === currentLang);
   });
+  // Локализуем кнопки действий под таблицей.
+  const dl = document.getElementById('download-btn');
+  if (dl) dl.textContent = t().download;
+  const re = document.getElementById('u-reanalyze-btn');
+  if (re) re.textContent = t().reanalyze;
   // Перерисовать таблицу ключей — её заголовки тоже локализованы.
   if (unlockedKeywords && unlockedKeywords.length) renderKwTable();
 }
@@ -600,7 +609,9 @@ function renderInsights(data) {
     </div>`;
   }).join('');
   const dqKey = data.meta && data.meta.dataQuality;
-  const dq = dqKey ? (t().dq[dqKey] || dqKey + ' data') : '';
+  const model = data.meta && data.meta.model;
+  const aiLabel = model && model !== 'rule-based' ? t().aiOn : t().aiOff;
+  const dq = [dqKey ? (t().dq[dqKey] || dqKey + ' data') : '', aiLabel].filter(Boolean).join(' · ');
   box.innerHTML = `
     <div class="ai-summary"><span class="ic">✦</span><div>${escHtml(data.summary)}</div></div>
     ${quadrantHtml(data.quadrant)}
@@ -614,6 +625,7 @@ function renderInsights(data) {
 }
 
 document.getElementById('download-btn').addEventListener('click', downloadExcel);
+document.getElementById('u-reanalyze-btn').addEventListener('click', () => startAnalysis(true));
 
 async function downloadExcel() {
   if (!currentJobId) return;
