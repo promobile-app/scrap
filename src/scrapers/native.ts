@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { request } from 'undici';
 import { config } from '../config.js';
+import { nextDispatcher } from './proxy.js';
 
 /**
  * Нативный поиск App Store — тот же endpoint, что использует приложение
@@ -175,14 +176,17 @@ export async function nativeSearchIds(
         Accept: 'application/json',
       };
 
+      // Один прокси на весь запрос (включая редирект-хопы) — round-robin по пулу.
+      const dispatcher = nextDispatcher();
+      const reqOpts = dispatcher ? { method: 'GET' as const, headers, dispatcher } : { method: 'GET' as const, headers };
       // MZSearch отвечает 302 на MZStore — следуем за редиректом вручную.
       let target: string | URL = url;
-      let res = await request(target, { method: 'GET', headers });
+      let res = await request(target, reqOpts);
       for (let hop = 0; hop < 3 && res.statusCode >= 300 && res.statusCode < 400; hop++) {
         const loc = res.headers['location'];
         if (!loc) break;
         target = new URL(String(loc), target);
-        res = await request(target, { method: 'GET', headers });
+        res = await request(target, reqOpts);
       }
       if (res.statusCode >= 400) throw new Error(`HTTP ${res.statusCode}`);
 
