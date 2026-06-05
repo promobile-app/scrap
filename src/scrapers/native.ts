@@ -21,10 +21,14 @@ import { config } from '../config.js';
  */
 interface Storefront {
   id: number;
-  langs: Record<string, number>;
+  // Явные lang-id Apple для витрины. Опционально: если язык не указан или не
+  // найден в карте — шлём `<id>,29` (язык витрины по умолчанию, обычно нативный),
+  // который endpoint принимает для любой страны.
+  langs?: Record<string, number>;
 }
 
 const STOREFRONTS: Record<string, Storefront> = {
+  // Для этих витрин знаем явные lang-id (мультиязычная выдача).
   us: { id: 143441, langs: { en: 1 } },
   gb: { id: 143444, langs: { en: 2 } },
   de: { id: 143443, langs: { de: 4, en: 2 } },
@@ -35,6 +39,19 @@ const STOREFRONTS: Record<string, Storefront> = {
   es: { id: 143454, langs: { es: 8, en: 2 } },
   it: { id: 143450, langs: { it: 7, en: 2 } },
   ca: { id: 143455, langs: { en: 6, fr: 3 } },
+  // Остальные витрины — только storefront-id (язык по умолчанию). Все id
+  // эмпирически проверены на нативном endpoint (HTTP 200 + непустая выдача).
+  au: { id: 143460 }, nl: { id: 143452 }, se: { id: 143456 }, no: { id: 143457 },
+  dk: { id: 143458 }, fi: { id: 143447 }, ie: { id: 143449 }, at: { id: 143445 },
+  be: { id: 143446 }, ch: { id: 143459 }, pt: { id: 143453 }, gr: { id: 143448 },
+  tr: { id: 143480 }, cz: { id: 143489 }, hu: { id: 143482 }, ro: { id: 143487 },
+  sk: { id: 143496 }, br: { id: 143503 }, mx: { id: 143468 }, ar: { id: 143505 },
+  cl: { id: 143483 }, co: { id: 143501 }, pe: { id: 143507 }, jp: { id: 143462 },
+  cn: { id: 143465 }, kr: { id: 143466 }, hk: { id: 143463 }, tw: { id: 143470 },
+  sg: { id: 143464 }, my: { id: 143473 }, th: { id: 143475 }, id: { id: 143476 },
+  ph: { id: 143474 }, vn: { id: 143471 }, in: { id: 143467 }, ae: { id: 143481 },
+  sa: { id: 143479 }, il: { id: 143491 }, eg: { id: 143516 }, za: { id: 143472 },
+  ng: { id: 143561 }, af: { id: 143610 }, pk: { id: 143477 }, nz: { id: 143461 },
 };
 
 export const SUPPORTED_COUNTRIES = Object.keys(STOREFRONTS);
@@ -83,7 +100,7 @@ class AppleChannel {
   release(): void { this.inFlight = Math.max(0, this.inFlight - 1); }
 }
 
-const CHANNEL_COUNT = Number(process.env.APPLE_CHANNELS ?? 4);
+const CHANNEL_COUNT = Number(process.env.APPLE_CHANNELS ?? 6);
 const CHANNELS: AppleChannel[] = Array.from({ length: CHANNEL_COUNT }, () => new AppleChannel());
 
 // Round-robin: берём канал с минимальным inFlight, чтобы нагрузка
@@ -114,12 +131,15 @@ function releaseChannel(ch: AppleChannel): void {
 }
 
 /** Собирает значение X-Apple-Store-Front для страны и (опц.) языка витрины. */
-function storeFront(country: string, language?: string): string {
+/**
+ * Строка заголовка X-Apple-Store-Front для страны/языка (без суффикса t:native).
+ * Если запрошен язык, известный для витрины, — `<id>-<langId>,29`; иначе
+ * `<id>,29` (язык витрины по умолчанию), который endpoint принимает для всех стран.
+ */
+export function storeFront(country: string, language?: string): string {
   const sf = STOREFRONTS[country.toLowerCase()] ?? STOREFRONTS.us!;
-  const langCodes = sf.langs;
-  const defaultLang = Object.keys(langCodes)[0]!;
-  const langId = langCodes[language?.toLowerCase() ?? ''] ?? langCodes[defaultLang]!;
-  return `${sf.id}-${langId},29`;
+  const langId = language ? sf.langs?.[language.toLowerCase()] : undefined;
+  return langId ? `${sf.id}-${langId},29` : `${sf.id},29`;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

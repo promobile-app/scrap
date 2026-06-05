@@ -1,5 +1,5 @@
 import { fetchJson, fetchText } from './http.js';
-import { nativeSearchIds } from './native.js';
+import { nativeSearchIds, storeFront } from './native.js';
 import { config } from '../config.js';
 
 const ITUNES = 'https://itunes.apple.com';
@@ -174,17 +174,4 @@ export async function suggest(term: string, country = config.defaultCountry): Pr
     (s) => s && !/^\d+$/.test(s) && !s.includes('://') && !/^[A-Z][a-z]+$/.test(s),
   );
   return [...new Set(terms)];
-}
-
-// Карта storefront-кодов Apple (id магазина по стране).
-const STOREFRONTS: Record<string, string> = {
-  us: '143441-1,29',
-  gb: '143444-2,29',
-  de: '143443-4,29',
-  ua: '143492-16,29',
-  ru: '143469-16,29',
-};
-
-function storeFront(country: string): string {
-  return STOREFRONTS[country.toLowerCase()] ?? STOREFRONTS.us!;
 }
