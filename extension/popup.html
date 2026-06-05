@@ -198,6 +198,17 @@
     .qcell.push { border-top-color: var(--accent); } .qcell.push .qt { color: #8aaaff; }
     .qcell.long { border-top-color: #d8954a; }     .qcell.long .qt { color: #e0a96a; }
     .qcell.ignore { border-top-color: #5f5f66; }   .qcell.ignore .qt { color: #a8a8b0; }
+
+    /* --- language toggle --- */
+    .lang-row { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin: 14px 0 0; }
+    .lang-row .lang-lbl { font-size: 11px; color: var(--muted); }
+    .lang-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+    .lang-seg button {
+      font: inherit; font-size: 11px; font-weight: 700; padding: 5px 11px;
+      border: 0; background: var(--surface-2); color: var(--muted); cursor: pointer;
+    }
+    .lang-seg button + button { border-left: 1px solid var(--line); }
+    .lang-seg button.active { background: #1f2640; color: #8aaaff; }
   </style>
 </head>
 <body>
@@ -280,6 +291,12 @@
           <div class="mv" id="u-top10">0</div><div class="ml">Top 10</div></div>
       </div>
 
+      <div class="lang-row">
+        <div class="lang-seg" id="lang-seg">
+          <button type="button" data-lang="en">EN</button>
+          <button type="button" data-lang="ru">RU</button>
+        </div>
+      </div>
       <div class="goal-row">
         <div class="goal-pill active" data-goal="rank_up">Rank up</div>
         <div class="goal-pill" data-goal="expand">Expand</div>
