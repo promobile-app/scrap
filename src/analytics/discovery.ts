@@ -5,7 +5,8 @@ export interface DiscoveredKeyword {
   term: string;
   rank: number | null;
   totalResults: number;
-  volumeScore: number;
+  volumeScore: number;     // СПРОС (autocomplete-взвешенный), как в volume.ts
+  saturationScore: number; // насыщенность выдачи (предложение/конкуренция)
 }
 
 export interface DiscoveryResult {
@@ -21,12 +22,25 @@ const STOP_WORDS = new Set([
 ]);
 
 /**
- * Лёгкая оценка объёма по насыщенности выдачи (5-100).
- * Точную метрику даёт estimateVolume / Apple Search Ads.
+ * Насыщенность выдачи (5-100) — сигнал ПРЕДЛОЖЕНИЯ (сколько приложений в нише).
+ * Это НЕ спрос: коррелирует с difficulty. Раньше отдавалось как «объём».
  */
-function volumeFromResults(total: number): number {
+function saturationFromResults(total: number): number {
   const signal = Math.min(1, Math.log10(total + 1) / Math.log10(201));
   return Math.round(5 + signal * 95);
+}
+
+/**
+ * Оценка СПРОСА (5-100) — как estimateVolume в analytics/volume.ts:
+ * autocomplete-сигнал (вес 0.6) + насыщенность (0.4) + штраф за длинный хвост.
+ * autocompleteSignal ∈ [0..1] собирается бесплатно на этапе autocomplete-расширения.
+ */
+function demandFromSignals(autocompleteSignal: number, total: number, term: string): number {
+  const resultSignal = Math.min(1, Math.log10(total + 1) / Math.log10(201));
+  const wordCount = term.trim().split(/\s+/).filter(Boolean).length;
+  const lengthPenalty = wordCount >= 4 ? 0.6 : wordCount === 3 ? 0.8 : 1;
+  const raw = (autocompleteSignal * 0.6 + resultSignal * 0.4) * lengthPenalty;
+  return Math.round(5 + raw * 95);
 }
 
 /** Нормализованные слова из строки. */
@@ -86,10 +100,12 @@ async function buildCandidates(
   title: string,
   genre: string,
   country: string,
-): Promise<string[]> {
+): Promise<{ candidates: string[]; autocompleteSignals: Map<string, number> }> {
   const seeds = [...new Set([...words(title), ...words(genre)])].slice(0, 6);
 
   const candidates = new Set<string>([...seeds, genre.toLowerCase()]);
+  // Сигнал спроса по термину: позиция в подсказках Apple, нормированная в [0..1].
+  const autocompleteSignals = new Map<string, number>();
 
   // Биграммы из названия (например "photo editor").
   const titleWords = words(title);
@@ -102,10 +118,19 @@ async function buildCandidates(
     suggest(seed, country).catch(() => [] as string[]),
   );
   for (const hints of hintLists) {
-    hints.slice(0, 5).forEach((h) => candidates.add(h));
+    const listLen = Math.max(hints.length, 1);
+    hints.slice(0, 5).forEach((h, idx) => {
+      const hl = h.toLowerCase().trim();
+      const sig = 1 - idx / listLen;
+      if (sig > (autocompleteSignals.get(hl) ?? 0)) autocompleteSignals.set(hl, sig);
+      candidates.add(h);
+    });
   }
 
-  return [...candidates].filter((c) => c.length >= 3).slice(0, 30);
+  return {
+    candidates: [...candidates].filter((c) => c.length >= 3).slice(0, 30),
+    autocompleteSignals,
+  };
 }
 
 /**
@@ -122,7 +147,9 @@ export async function discoverKeywords(
   const app = await appLookup(appId, country);
   if (!app) throw new Error('Приложение не найдено в этом гео');
 
-  const candidates = await buildCandidates(app.title, app.primaryGenre, country);
+  const { candidates, autocompleteSignals } = await buildCandidates(
+    app.title, app.primaryGenre, country,
+  );
 
   // Параллельный сбор ранков: ×6-8 быстрее чем for-await.
   // Apple channel pool в native.ts сам разрулит slot-throttling.
@@ -139,16 +166,18 @@ export async function discoverKeywords(
         }
       }
       const idx = ids.indexOf(String(appId));
+      const signal = autocompleteSignals.get(term.toLowerCase().trim()) ?? 0;
       return {
         term,
         rank: idx === -1 ? null : idx + 1,
         totalResults: ids.length,
-        volumeScore: volumeFromResults(ids.length),
+        volumeScore: demandFromSignals(signal, ids.length, term),
+        saturationScore: saturationFromResults(ids.length),
       };
     })
   ).filter((k): k is DiscoveredKeyword => k !== null);
 
-  // Сортировка: сначала где приложение в топе, затем по объёму.
+  // Сортировка: сначала где приложение в топе, затем по спросу.
   keywords.sort((a, b) => {
     if ((a.rank === null) !== (b.rank === null)) return a.rank === null ? 1 : -1;
     if (a.rank !== null && b.rank !== null && a.rank !== b.rank) return a.rank - b.rank;

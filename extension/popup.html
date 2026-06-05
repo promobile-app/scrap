@@ -122,6 +122,54 @@
     .rank-top { color: var(--green); font-weight: 700; }
     .row-actions { display: flex; gap: 8px; margin-top: 10px; }
     .row-actions .btn { width: auto; flex: 1; padding: 10px 12px; }
+
+    /* --- AI insights (action plan) --- */
+    .goal-row { display: flex; gap: 6px; margin: 14px 0 12px; }
+    .goal-pill {
+      flex: 1; text-align: center; padding: 7px 0; border-radius: 10px;
+      background: var(--surface-2); border: 1px solid var(--line);
+      color: var(--muted); font-size: 11px; cursor: pointer; transition: .15s;
+    }
+    .goal-pill:hover { background: #2a2a30; }
+    .goal-pill.active { background: #1f2640; border-color: var(--accent); color: #8aaaff; font-weight: 700; }
+    .ai-summary {
+      display: flex; gap: 8px; align-items: flex-start;
+      background: #15151a; border: 1px solid var(--line); border-radius: 12px;
+      padding: 11px 12px; margin-bottom: 12px; line-height: 1.45; color: #d4d4d8;
+    }
+    .ai-summary .ic { color: #5b8bff; flex: none; font-size: 14px; line-height: 1.2; }
+    .plan-head { display: flex; align-items: center; justify-content: space-between; margin: 4px 0 8px; }
+    .plan-head .lbl {
+      font-size: 10px; font-weight: 700; letter-spacing: .4px;
+      text-transform: uppercase; color: var(--muted);
+    }
+    .plan-head .dq { font-size: 11px; color: #5f5f66; }
+    .plan { display: flex; flex-direction: column; gap: 7px; }
+    .act {
+      display: flex; gap: 10px; background: var(--surface-2);
+      border: 1px solid var(--line); border-left: 3px solid var(--muted);
+      border-radius: 9px; padding: 9px 11px;
+    }
+    .act .pr { color: #5f5f66; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .act .body { flex: 1; min-width: 0; }
+    .act .top { display: flex; align-items: center; gap: 7px; margin-bottom: 3px; }
+    .act .term { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .act .rk { margin-left: auto; color: var(--muted); font-size: 11px; flex: none; }
+    .act .rk.rank-top { color: var(--green); font-weight: 700; }
+    .act .why { color: #9a9aa2; font-size: 11.5px; line-height: 1.4; }
+    .badge {
+      font-size: 9.5px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .3px; padding: 2px 7px; border-radius: 6px; flex: none;
+    }
+    .act.push-qw { border-left-color: #22c55e; }
+    .badge.push-qw { background: #0f2e1a; color: #4ade80; }
+    .act.push { border-left-color: var(--accent); }
+    .badge.push { background: #14233f; color: #8aaaff; }
+    .act.monitor { border-left-color: #5f5f66; }
+    .badge.monitor { background: #26262b; color: #a8a8b0; }
+    .act.skip { border-left-color: #6b3636; opacity: .8; }
+    .badge.skip { background: #2e1414; color: #f08a8a; }
+    .ai-loading { color: var(--muted); font-size: 12px; padding: 10px 2px; }
   </style>
 </head>
 <body>
@@ -203,7 +251,15 @@
         <div class="mtile clickable" id="u-tile-top10">
           <div class="mv" id="u-top10">0</div><div class="ml">Top 10</div></div>
       </div>
-      <button id="download-btn" class="btn">⬇ Download Excel</button>
+
+      <div class="goal-row">
+        <div class="goal-pill active" data-goal="rank_up">Rank up</div>
+        <div class="goal-pill" data-goal="expand">Expand</div>
+        <div class="goal-pill" data-goal="defend">Defend</div>
+      </div>
+      <div id="ai-insights"></div>
+
+      <button id="download-btn" class="btn" style="margin-top:14px">⬇ Download Excel</button>
       <div class="kw-list" id="kw-list"></div>
     </div>
 
