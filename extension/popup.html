@@ -209,6 +209,24 @@
     }
     .lang-seg button + button { border-left: 1px solid var(--line); }
     .lang-seg button.active { background: #1f2640; color: #8aaaff; }
+
+    /* --- SERP: топ выдачи по ключу (разворот строки) --- */
+    .kw-list tr.kw-row { cursor: pointer; }
+    .kw-list tr.kw-row:hover td { background: #1d1d22; }
+    .kw-list td.kw-term::before { content: '▸ '; color: var(--muted); }
+    .kw-list tr.kw-row.open td.kw-term::before { content: '▾ '; color: #8aaaff; }
+    .serp-row td { padding: 0 !important; background: #131318; }
+    .serp-head { font-size: 10px; color: var(--muted); padding: 7px 11px 4px; }
+    .serp { max-height: 200px; overflow-y: auto; padding: 0 6px 8px; }
+    .serp-item { display: flex; gap: 8px; align-items: center; padding: 4px 6px;
+      border-bottom: 1px solid #202024; font-size: 12px; }
+    .serp-item:last-child { border-bottom: 0; }
+    .serp-item .sp-pos { width: 30px; text-align: right; color: var(--muted);
+      font-variant-numeric: tabular-nums; flex: none; }
+    .serp-item .sp-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .serp-item.me { background: #1f2640; border-radius: 6px; }
+    .serp-item.me .sp-pos, .serp-item.me .sp-title { color: #8aaaff; font-weight: 700; }
+    .serp-load { padding: 10px 11px; color: var(--muted); font-size: 12px; }
   </style>
 </head>
 <body>
