@@ -602,6 +602,19 @@ function escHtml(s) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// Отпечаток набора ключей — план пересобираем только при его изменении.
+function kwFingerprint() {
+  let h = 5381;
+  for (const k of unlockedKeywords) {
+    const s = k.term + ':' + k.rank;
+    for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  }
+  return unlockedKeywords.length + '.' + (h >>> 0).toString(36);
+}
+function insightsStoreKey(goal, lang) {
+  return 'ins:' + currentApp.platform + '|' + currentApp.appId + '|' + currentApp.country + '|' + goal + '|' + lang;
+}
+
 async function loadInsights() {
   const box = document.getElementById('ai-insights');
   if (!box || !currentJobId) { if (box) box.innerHTML = ''; return; }
@@ -609,6 +622,16 @@ async function loadInsights() {
   const lang = currentLang;
   const key = goal + '|' + lang;
   if (insightsByGoal[key]) { renderInsights(insightsByGoal[key]); return; }
+  // Кэш, переживающий закрытие попапа: тот же приложение+гео+goal+язык и тот же
+  // набор ключей (отпечаток) — показываем сохранённый план сразу, без пересборки.
+  const fp = kwFingerprint();
+  const stKey = insightsStoreKey(goal, lang);
+  const stored = (await storage.get([stKey]))[stKey];
+  if (stored && stored.fp === fp && goal === currentGoal && lang === currentLang) {
+    insightsByGoal[key] = stored.data;
+    renderInsights(stored.data);
+    return;
+  }
   const reqId = ++insightsReq;
   box.innerHTML = `<div class="ai-loading"><span class="spinner"></span> ${t().loading}</div>`;
   try {
@@ -617,6 +640,7 @@ async function loadInsights() {
       body: JSON.stringify({ jobId: currentJobId, goal, lang }),
     });
     insightsByGoal[key] = data;
+    storage.set({ [stKey]: { fp, data } });
     if (reqId === insightsReq && goal === currentGoal && lang === currentLang) renderInsights(data);
   } catch (e) {
     if (reqId !== insightsReq) return; // ответ устарел — пользователь сменил goal/язык
