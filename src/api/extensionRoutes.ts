@@ -373,6 +373,7 @@ export async function registerExtensionRoutes(app: FastifyInstance): Promise<voi
         'payment_success',
         'payment_failed',
         'report_downloaded',
+        'insights_viewed',
       ]);
       if (!allowed.has(event)) return reply.code(400).send({ error: 'unknown event' });
       await query(

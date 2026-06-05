@@ -60,7 +60,7 @@ export interface DiscoveryJobState {
 // на каждый кандидат идёт замер ранка (запрос к Apple), а хвост за ~300
 // почти не добавляет релевантных ключей, зато сильно растягивает время.
 // Тюнится через MAX_KEYWORDS.
-const MAX_KEYWORDS = Number(process.env.MAX_KEYWORDS ?? 300);
+const MAX_KEYWORDS = Number(process.env.MAX_KEYWORDS ?? 200);
 // Глубина BFS-расширения через autocomplete. Снижено с 3 до 2 — третий
 // уровень почти не приносит релевантных ключей, но множит suggest-запросы.
 const BFS_MAX_DEPTH = Number(process.env.BFS_MAX_DEPTH ?? 2);

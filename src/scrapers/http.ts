@@ -22,7 +22,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // Теперь — пул из HTTP_CHANNELS слотов: каждый со своим расписанием, так что
 // одновременно «в полёте» может быть до N запросов с интервалом scrapeDelayMs
 // на слот → ×N throughput. Round-robin берёт наименее загруженный слот.
-const HTTP_CHANNELS = Number(process.env.HTTP_CHANNELS ?? 4);
+const HTTP_CHANNELS = Number(process.env.HTTP_CHANNELS ?? 6);
 const slots = Array.from({ length: HTTP_CHANNELS }, () => ({ nextAt: 0, inFlight: 0 }));
 let slotCursor = 0;
 

@@ -170,6 +170,34 @@
     .act.skip { border-left-color: #6b3636; opacity: .8; }
     .badge.skip { background: #2e1414; color: #f08a8a; }
     .ai-loading { color: var(--muted); font-size: 12px; padding: 10px 2px; }
+
+    /* --- demand × difficulty quadrant --- */
+    .quad-cap {
+      display: flex; align-items: center; gap: 6px; margin: 4px 0 8px;
+      font-size: 10px; font-weight: 700; letter-spacing: .3px;
+      text-transform: uppercase; color: var(--muted);
+    }
+    .quad-cap .sub { font-weight: 400; text-transform: none; letter-spacing: 0; color: #5f5f66; }
+    .quad { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 14px; }
+    .qcell {
+      background: var(--surface-2); border: 1px solid var(--line);
+      border-top: 2px solid var(--muted); border-radius: 10px; padding: 9px 10px;
+    }
+    .qcell.empty { opacity: .5; }
+    .qcell .qh { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+    .qcell .qt { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; }
+    .qcell .qn { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .qchips { display: flex; flex-wrap: wrap; gap: 4px; }
+    .qchip {
+      font-size: 10.5px; padding: 2px 6px; border-radius: 6px; background: #15151a;
+      border: 1px solid var(--line); color: #c4c4cc; max-width: 100%;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .qmore { font-size: 10.5px; color: var(--muted); padding: 2px; }
+    .qcell.qw { border-top-color: #22c55e; }      .qcell.qw .qt { color: #4ade80; }
+    .qcell.push { border-top-color: var(--accent); } .qcell.push .qt { color: #8aaaff; }
+    .qcell.long { border-top-color: #d8954a; }     .qcell.long .qt { color: #e0a96a; }
+    .qcell.ignore { border-top-color: #5f5f66; }   .qcell.ignore .qt { color: #a8a8b0; }
   </style>
 </head>
 <body>

@@ -481,6 +481,30 @@ async function loadInsights() {
   }
 }
 
+function quadCell(cls, title, terms) {
+  const list = terms || [];
+  const shown = list.slice(0, 5);
+  const more = list.length - shown.length;
+  const chips = shown.map((t) => `<span class="qchip">${escHtml(t)}</span>`).join('')
+    + (more > 0 ? `<span class="qmore">+${more}</span>` : '');
+  return `<div class="qcell ${cls}${list.length ? '' : ' empty'}">
+    <div class="qh"><span class="qt">${title}</span><span class="qn">${list.length}</span></div>
+    <div class="qchips">${chips || '<span class="qmore">—</span>'}</div>
+  </div>`;
+}
+
+function quadrantHtml(q) {
+  if (!q) return '';
+  // Колонки = сложность (слева легче), строки = приоритет действия.
+  return `<div class="quad-cap"><span>Quadrant</span><span class="sub">· demand × difficulty</span></div>
+    <div class="quad">
+      ${quadCell('qw', 'Quick wins', q.quickWins)}
+      ${quadCell('long', 'Long shots', q.longShots)}
+      ${quadCell('push', 'Push now', q.pushNow)}
+      ${quadCell('ignore', 'Ignore', q.ignore)}
+    </div>`;
+}
+
 function renderInsights(data) {
   const box = document.getElementById('ai-insights');
   if (!box) return;
@@ -506,8 +530,14 @@ function renderInsights(data) {
   const dq = data.meta && data.meta.dataQuality ? data.meta.dataQuality + ' data' : '';
   box.innerHTML = `
     <div class="ai-summary"><span class="ic">✦</span><div>${escHtml(data.summary)}</div></div>
+    ${quadrantHtml(data.quadrant)}
     <div class="plan-head"><span class="lbl">Action plan</span><span class="dq">${dq}</span></div>
     <div class="plan">${rows}</div>`;
+  logEvent('insights_viewed', {
+    jobId: currentJobId,
+    goal: currentGoal,
+    model: (data.meta && data.meta.model) || null,
+  });
 }
 
 document.getElementById('download-btn').addEventListener('click', downloadExcel);
