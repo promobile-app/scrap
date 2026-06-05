@@ -131,6 +131,20 @@ export function isQualityCandidate(
   return autocompleteConfirmed.has(t) || titleBigrams.has(t);
 }
 
+/**
+ * Релевантность ключа приложению. coreTokens — «ядро»: слова из названия,
+ * жанра и топ-частотных слов описания. Ключ релевантен, если делит хотя бы один
+ * токен с ядром. Отсекает реальные, но не относящиеся к приложению запросы
+ * ("community bank", "device monitor" для YouTube), которые пролезали из-за
+ * слишком широкого пула (вся описалка + конкуренты) и одного общего токена.
+ * Пустое ядро => не фильтруем (нет метаданных — не режем вслепую).
+ */
+export function coreRelevant(term: string, coreTokens: Set<string>): boolean {
+  if (coreTokens.size === 0) return true;
+  const toks = term.toLowerCase().trim().split(/\s+/).filter(Boolean);
+  return toks.some((t) => coreTokens.has(t));
+}
+
 function words(s: string): string[] {
   return s
     .toLowerCase()
@@ -289,11 +303,17 @@ async function buildCandidates(
     depth++;
   }
   // Жёсткий фильтр качества: одиночные слова — ок, многословные фразы — только
-  // подтверждённые автокомплитом или биграммы из названия приложения.
+  // подтверждённые автокомплитом или биграммы из названия приложения. Плюс
+  // фильтр релевантности по ядру (название+жанр+топ описания), чтобы не мерить
+  // ранги для не относящихся к приложению запросов.
   const titleBigramSet = new Set(bigrams(words(title)));
+  const coreTokens = new Set<string>([...titleWords, ...genreWords, ...descWords.slice(0, 20)]);
   return {
     candidates: [...candidates]
-      .filter((c) => c.length >= 3 && isQualityCandidate(c, autocompleteSignals, titleBigramSet))
+      .filter((c) =>
+        c.length >= 3
+        && isQualityCandidate(c, autocompleteSignals, titleBigramSet)
+        && coreRelevant(c, coreTokens))
       .slice(0, MAX_KEYWORDS),
     relevantTokens,
     autocompleteSignals,
@@ -414,6 +434,10 @@ async function runJob(
     let title = appId;
     let candidates: string[];
     let relevantTokens: Set<string> = new Set();
+    // «Ядро» релевантности приложения (название+жанр+топ описания). Считается в
+    // ОБОИХ путях (и кэш, и свежий) из метаданных приложения, поэтому фильтр
+    // релевантности работает даже когда кандидаты пришли из кэша.
+    let coreTokens: Set<string> = new Set();
     // Сигналы спроса по терминам (autocomplete). Заполняются в свежем BFS;
     // на кэш-пути (useCached) пустые — тогда demand берётся уже из keyword_cache.
     let autocompleteSignals: Map<string, number> = new Map();
@@ -433,6 +457,10 @@ async function runJob(
       const app = await gpAppLookup(appId, country);
       if (!app) throw new Error('Приложение не найдено в Google Play для этого гео');
       title = app.title;
+      coreTokens = new Set<string>([
+        ...words(app.title), ...words(app.genre),
+        ...topWords(`${app.summary} ${app.description}`, 20),
+      ]);
       if (useCached) {
         candidates = persisted;
       } else {
@@ -453,6 +481,11 @@ async function runJob(
       const app = await appLookup(Number(appId), country);
       if (!app) throw new Error('Приложение не найдено в App Store для этого гео');
       title = app.title;
+      coreTokens = new Set<string>([
+        ...words(app.title),
+        ...words(`${app.primaryGenre} ${(app.genres ?? []).join(' ')}`),
+        ...topWords(app.description ?? '', 20),
+      ]);
       if (useCached) {
         candidates = persisted;
       } else {
@@ -479,6 +512,13 @@ async function runJob(
       }
     }
     await updateDiscoveryJob(jobId, { appTitle: title, total: candidates.length });
+
+    // Финальная сборка списка: на свежем пути — фильтр сигнала (объём+токены),
+    // плюс ВСЕГДА фильтр релевантности по ядру (работает и на кэш-пути), затем сортировка.
+    const finalize = (list: UrlKeyword[]): UrlKeyword[] => {
+      const base = useCached ? list : filterSignal(list, relevantTokens);
+      return sortKeywords(base.filter((k) => coreRelevant(k.term, coreTokens)));
+    };
 
     const cachedLookup = async (id: string): Promise<GpAppInfo | null> => {
       if (appCache.has(id)) return appCache.get(id) ?? null;
@@ -540,7 +580,7 @@ async function runJob(
       for (const k of part) if (k) found.push(k);
       await updateDiscoveryJob(jobId, {
         processed: Math.min(i + chunk, candidates.length),
-        keywords: sortKeywords(filterSignal([...found], relevantTokens)),
+        keywords: finalize([...found]),
       });
     }
 
@@ -548,11 +588,10 @@ async function runJob(
       throw new Error('Магазин ограничил запросы — не удалось получить выдачу. Попробуйте позже.');
     }
 
-    // Если кандидаты пришли из кэша — фильтр по relevantTokens пропускаем,
-    // они уже были отфильтрованы при первом прогоне.
-    const finalKeywords = useCached
-      ? sortKeywords([...found])
-      : sortKeywords(filterSignal([...found], relevantTokens));
+    // Свежий путь: сигнал+релевантность. Кэш-путь: фильтр сигнала пропускаем
+    // (кандидаты уже отфильтрованы при первом прогоне), но релевантность по ядру
+    // применяем всегда — чтобы старый мусор из словаря не доезжал до пользователя.
+    const finalKeywords = finalize([...found]);
 
     await updateDiscoveryJob(jobId, {
       status: 'done',
