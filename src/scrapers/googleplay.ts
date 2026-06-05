@@ -1,5 +1,6 @@
 import gplay from 'google-play-scraper';
 import { config } from '../config.js';
+import { gpRequestOptions } from './proxy.js';
 
 /**
  * Скрейпер Google Play. У Play Store нет официального API — библиотека
@@ -70,7 +71,9 @@ export async function gpAppLookup(
   country = config.defaultCountry,
 ): Promise<GpAppInfo | null> {
   try {
-    const r = await gplay.app({ appId, country, lang: langOf(country) });
+    const r = await gplay.app({
+      appId, country, lang: langOf(country), requestOptions: gpRequestOptions(),
+    } as Parameters<typeof gplay.app>[0]);
     return mapApp(r as GpRaw);
   } catch {
     return null;
@@ -83,7 +86,7 @@ export async function gpSearch(
   country = config.defaultCountry,
   num = 100,
 ): Promise<GpAppInfo[]> {
-  const results = await gplay.search({ term, country, lang: langOf(country), num });
+  const results = await gplay.search({ term, country, lang: langOf(country), num, requestOptions: gpRequestOptions() });
   return (results as GpRaw[]).map(mapApp);
 }
 
@@ -104,7 +107,9 @@ export async function gpSuggest(
   country = config.defaultCountry,
 ): Promise<string[]> {
   try {
-    return await gplay.suggest({ term, country, lang: langOf(country) });
+    return await gplay.suggest({
+      term, country, lang: langOf(country), requestOptions: gpRequestOptions(),
+    } as Parameters<typeof gplay.suggest>[0]);
   } catch {
     return [];
   }
@@ -126,6 +131,7 @@ export async function gpTopChart(
     country,
     lang: langOf(country),
     num,
+    requestOptions: gpRequestOptions(),
   } as Parameters<typeof gplay.list>[0]);
   return (results as GpRaw[]).map(mapApp);
 }

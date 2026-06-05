@@ -1,5 +1,6 @@
 import { request } from 'undici';
 import { config } from '../config.js';
+import { nextDispatcher } from './proxy.js';
 
 const USER_AGENTS = [
   'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
@@ -64,9 +65,11 @@ export async function fetchJson<T = unknown>(url: string, opts: FetchOptions = {
   for (let attempt = 0; attempt < config.scrapeMaxRetries; attempt++) {
     const slot = await acquireSlot();
     try {
+      const dispatcher = nextDispatcher();
       const res = await request(fullUrl, {
         method: 'GET',
         headers: { 'User-Agent': pickUserAgent(), Accept: 'application/json', ...opts.headers },
+        ...(dispatcher ? { dispatcher } : {}),
       });
       if (res.statusCode === 429 || res.statusCode >= 500) {
         throw new Error(`HTTP ${res.statusCode}`);
@@ -96,9 +99,11 @@ export async function fetchText(url: string, opts: FetchOptions = {}): Promise<s
   for (let attempt = 0; attempt < config.scrapeMaxRetries; attempt++) {
     const slot = await acquireSlot();
     try {
+      const dispatcher = nextDispatcher();
       const res = await request(fullUrl, {
         method: 'GET',
         headers: { 'User-Agent': pickUserAgent(), ...opts.headers },
+        ...(dispatcher ? { dispatcher } : {}),
       });
       if (res.statusCode === 429 || res.statusCode >= 500) throw new Error(`HTTP ${res.statusCode}`);
       if (res.statusCode >= 400) throw new Error(`HTTP ${res.statusCode} (non-retryable)`);
