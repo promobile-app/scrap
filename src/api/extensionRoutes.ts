@@ -327,7 +327,7 @@ export async function registerExtensionRoutes(app: FastifyInstance): Promise<voi
   // --- AI INSIGHTS (за paywall) ---
   // Превращает готовую таблицу ключей в приоритизированный план действий.
   // Работает поверх честных метрик спрос/сложность; отзывы не используются.
-  app.post<{ Body: { jobId?: number; goal?: string } }>(
+  app.post<{ Body: { jobId?: number; goal?: string; lang?: string } }>(
     '/ext/insights',
     async (req, reply) => {
       const uid = bearer(req);
@@ -345,11 +345,15 @@ export async function registerExtensionRoutes(app: FastifyInstance): Promise<voi
       if (state.status !== 'done') {
         return reply.code(409).send({ error: 'analysis not finished' });
       }
-      const cacheKey = `${jobId}|${goal}|${state.country}`;
+      // Язык пояснений: явный выбор из расширения (en/ru), иначе по стране витрины.
+      const locale = req.body.lang === 'ru' || req.body.lang === 'en'
+        ? req.body.lang
+        : state.country;
+      const cacheKey = `${jobId}|${goal}|${locale}`;
       const cached = insightsCache.get(cacheKey);
       if (cached) return cached;
       try {
-        const insights = await generateInsights(state, { goal, locale: state.country });
+        const insights = await generateInsights(state, { goal, locale });
         insightsCache.set(cacheKey, insights);
         return insights;
       } catch (e) {

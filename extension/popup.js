@@ -374,8 +374,36 @@ document.getElementById('payment-cancel').addEventListener('click', () => {
 let unlockedRanked = [];        // отсортированный список ключей с rank
 let unlockedFilter = 'all';     // 'all' | 'top3' | 'top10'
 let currentGoal = 'rank_up';    // 'rank_up' | 'expand' | 'defend'
-let insightsByGoal = {};        // goal -> ответ /ext/insights (для текущей job)
-let insightsReq = 0;            // токен против гонки при быстром переключении goal
+let currentLang = 'en';         // 'en' | 'ru' — язык инсайтов и подписей
+let langExplicit = false;       // пользователь выбрал язык вручную (не трогаем автодетект)
+let insightsByGoal = {};        // (goal|lang) -> ответ /ext/insights (для текущей job)
+let insightsReq = 0;            // токен против гонки при быстром переключении goal/языка
+
+// Подписи интерфейса инсайтов. Пояснения и summary приходят с бэкенда по locale.
+const I18N = {
+  en: {
+    goals: { rank_up: 'Rank up', expand: 'Expand', defend: 'Defend' },
+    quadCap: 'Quadrant', quadAxis: '· demand × difficulty',
+    quad: { quickWins: 'Quick wins', longShots: 'Long shots', pushNow: 'Push now', ignore: 'Ignore' },
+    plan: 'Action plan',
+    dq: { estimated: 'estimated data', measured: 'measured data' },
+    move: { 'push-qw': 'Push · quick win', push: 'Push', monitor: 'Monitor', skip: 'Skip' },
+    loading: 'Building your action plan…',
+    errText: "Couldn't build the action plan.", retry: 'Retry',
+  },
+  ru: {
+    goals: { rank_up: 'Рост', expand: 'Охват', defend: 'Защита' },
+    quadCap: 'Квадрант', quadAxis: '· спрос × сложность',
+    quad: { quickWins: 'Быстрые победы', longShots: 'Тяжёлая ниша', pushNow: 'Качать сейчас', ignore: 'Пропустить' },
+    plan: 'План действий',
+    dq: { estimated: 'оценочные данные', measured: 'точные данные' },
+    move: { 'push-qw': 'Качать · быстрая победа', push: 'Качать', monitor: 'Держать', skip: 'Пропустить' },
+    loading: 'Готовлю план действий…',
+    errText: 'Не удалось построить план.', retry: 'Повторить',
+  },
+};
+const t = () => I18N[currentLang] || I18N.en;
+const RU_COUNTRIES = new Set(['ru', 'ua', 'by', 'kz']);
 
 function renderUnlocked(state) {
   show('unlocked');
@@ -391,8 +419,11 @@ function renderUnlocked(state) {
   // AI-план: сбрасываем кэш под новую job, ставим goal по умолчанию и грузим.
   insightsByGoal = {};
   currentGoal = 'rank_up';
+  // Язык: уважаем явный выбор пользователя, иначе автодетект по стране витрины.
+  if (!langExplicit) currentLang = RU_COUNTRIES.has((state.country || '').toLowerCase()) ? 'ru' : 'en';
   document.querySelectorAll('.goal-pill').forEach((p) =>
     p.classList.toggle('active', p.dataset.goal === currentGoal));
+  renderLangUI();
   document.getElementById('ai-insights').innerHTML = '';
   loadInsights();
 }
@@ -442,15 +473,35 @@ document.querySelectorAll('.goal-pill').forEach((el) => {
   });
 });
 
+// Переключатель языка EN/RU — меняет и пояснения (locale на бэкенд), и подписи.
+document.querySelectorAll('#lang-seg button').forEach((el) => {
+  el.addEventListener('click', () => {
+    if (el.dataset.lang === currentLang) return;
+    currentLang = el.dataset.lang;
+    langExplicit = true;
+    storage.set({ insightsLang: currentLang });
+    renderLangUI();
+    loadInsights();
+  });
+});
+
+// Применяет язык к статичным подписям (пилюли цели + активная кнопка языка).
+function renderLangUI() {
+  document.querySelectorAll('.goal-pill').forEach((p) => {
+    p.textContent = t().goals[p.dataset.goal] || p.textContent;
+  });
+  document.querySelectorAll('#lang-seg button').forEach((b) => {
+    b.classList.toggle('active', b.dataset.lang === currentLang);
+  });
+}
+
 function moveClass(action, quickWins) {
   if (action.move === 'monitor') return 'monitor';
   if (action.move === 'skip') return 'skip';
   return quickWins.has(action.term) ? 'push-qw' : 'push';
 }
 function moveLabel(cls) {
-  return cls === 'push-qw' ? 'Push · quick win'
-    : cls === 'push' ? 'Push'
-      : cls === 'monitor' ? 'Monitor' : 'Skip';
+  return t().move[cls] || cls;
 }
 function escHtml(s) {
   return String(s == null ? '' : s)
@@ -461,23 +512,25 @@ async function loadInsights() {
   const box = document.getElementById('ai-insights');
   if (!box || !currentJobId) { if (box) box.innerHTML = ''; return; }
   const goal = currentGoal;
-  if (insightsByGoal[goal]) { renderInsights(insightsByGoal[goal]); return; }
+  const lang = currentLang;
+  const key = goal + '|' + lang;
+  if (insightsByGoal[key]) { renderInsights(insightsByGoal[key]); return; }
   const reqId = ++insightsReq;
-  box.innerHTML = '<div class="ai-loading"><span class="spinner"></span> Building your action plan…</div>';
+  box.innerHTML = `<div class="ai-loading"><span class="spinner"></span> ${t().loading}</div>`;
   try {
     const data = await api('/ext/insights', {
       method: 'POST',
-      body: JSON.stringify({ jobId: currentJobId, goal }),
+      body: JSON.stringify({ jobId: currentJobId, goal, lang }),
     });
-    insightsByGoal[goal] = data;
-    if (reqId === insightsReq && goal === currentGoal) renderInsights(data);
+    insightsByGoal[key] = data;
+    if (reqId === insightsReq && goal === currentGoal && lang === currentLang) renderInsights(data);
   } catch (e) {
-    if (reqId !== insightsReq) return; // ответ устарел — пользователь сменил goal
+    if (reqId !== insightsReq) return; // ответ устарел — пользователь сменил goal/язык
     if (e.status === 401) { await logout(); return; }
-    box.innerHTML = '<div class="ai-loading">Couldn\'t build the action plan. '
-      + '<a class="ai-retry" style="color:#5b8bff;cursor:pointer">Retry</a></div>';
+    box.innerHTML = `<div class="ai-loading">${t().errText} `
+      + `<a class="ai-retry" style="color:#5b8bff;cursor:pointer">${t().retry}</a></div>`;
     const r = box.querySelector('.ai-retry');
-    if (r) r.addEventListener('click', () => { delete insightsByGoal[goal]; loadInsights(); });
+    if (r) r.addEventListener('click', () => { delete insightsByGoal[key]; loadInsights(); });
   }
 }
 
@@ -495,13 +548,14 @@ function quadCell(cls, title, terms) {
 
 function quadrantHtml(q) {
   if (!q) return '';
+  const L = t().quad;
   // Колонки = сложность (слева легче), строки = приоритет действия.
-  return `<div class="quad-cap"><span>Quadrant</span><span class="sub">· demand × difficulty</span></div>
+  return `<div class="quad-cap"><span>${t().quadCap}</span><span class="sub">${t().quadAxis}</span></div>
     <div class="quad">
-      ${quadCell('qw', 'Quick wins', q.quickWins)}
-      ${quadCell('long', 'Long shots', q.longShots)}
-      ${quadCell('push', 'Push now', q.pushNow)}
-      ${quadCell('ignore', 'Ignore', q.ignore)}
+      ${quadCell('qw', L.quickWins, q.quickWins)}
+      ${quadCell('long', L.longShots, q.longShots)}
+      ${quadCell('push', L.pushNow, q.pushNow)}
+      ${quadCell('ignore', L.ignore, q.ignore)}
     </div>`;
 }
 
@@ -527,11 +581,12 @@ function renderInsights(data) {
       </div>
     </div>`;
   }).join('');
-  const dq = data.meta && data.meta.dataQuality ? data.meta.dataQuality + ' data' : '';
+  const dqKey = data.meta && data.meta.dataQuality;
+  const dq = dqKey ? (t().dq[dqKey] || dqKey + ' data') : '';
   box.innerHTML = `
     <div class="ai-summary"><span class="ic">✦</span><div>${escHtml(data.summary)}</div></div>
     ${quadrantHtml(data.quadrant)}
-    <div class="plan-head"><span class="lbl">Action plan</span><span class="dq">${dq}</span></div>
+    <div class="plan-head"><span class="lbl">${t().plan}</span><span class="dq">${dq}</span></div>
     <div class="plan">${rows}</div>`;
   logEvent('insights_viewed', {
     jobId: currentJobId,
@@ -581,11 +636,15 @@ async function boot() {
 }
 
 async function init() {
-  const stored = await storage.get(['token', 'userEmail']);
+  const stored = await storage.get(['token', 'userEmail', 'insightsLang']);
   if (stored.token) {
     token = stored.token;
     userEmail = stored.userEmail || null;
     renderUserbar();
+  }
+  if (stored.insightsLang === 'en' || stored.insightsLang === 'ru') {
+    currentLang = stored.insightsLang;
+    langExplicit = true;
   }
   boot();
 }
