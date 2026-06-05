@@ -503,6 +503,42 @@ app.get<{ Querystring: { appId: string; term: string; country?: string } }>(
   },
 );
 
+// Топ выдачи по ключу (кто на 1,2,…N месте) — для разворота строки в дашборде.
+app.get<{ Querystring: { term?: string; country?: string; platform?: string; appId?: string } }>(
+  '/serp',
+  async (req, reply) => {
+    const term = (req.query.term || '').trim();
+    if (!term) return reply.code(400).send({ error: 'term required' });
+    const country = (req.query.country ?? config.defaultCountry).toLowerCase();
+    const platform = req.query.platform === 'android' ? 'android' : 'ios';
+    const targetId = req.query.appId || '';
+    const LIMIT = 100;
+    try {
+      if (platform === 'android') {
+        const results = await gpSearch(term, country, LIMIT);
+        return {
+          term, total: results.length,
+          apps: results.slice(0, LIMIT).map((a, i) => ({
+            position: i + 1, appId: a.appId, title: a.title, isTarget: a.appId === targetId,
+          })),
+        };
+      }
+      const ids = await nativeSearchIds(term, country);
+      const top = await lookupApps(ids.slice(0, LIMIT), country);
+      const byId = new Map(top.map((a) => [String(a.appId), a.title]));
+      return {
+        term, total: ids.length,
+        apps: ids.slice(0, LIMIT).map((id, i) => ({
+          position: i + 1, appId: String(id), title: byId.get(String(id)) ?? String(id),
+          isTarget: String(id) === targetId,
+        })),
+      };
+    } catch (e) {
+      return reply.code(502).send({ error: e instanceof Error ? e.message : 'lookup failed' });
+    }
+  },
+);
+
 // Доступные языки витрины для страны.
 app.get<{ Querystring: { country?: string } }>('/languages', async (req) => {
   return { languages: storeLanguages(req.query.country ?? config.defaultCountry) };

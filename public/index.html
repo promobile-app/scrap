@@ -221,6 +221,14 @@
     .an-seg button { font: inherit; font-size: 12px; padding: 6px 11px; border: 0; background: var(--card); color: var(--muted); cursor: pointer; }
     .an-seg button + button { border-left: 1px solid var(--line); }
     .an-seg button.active { background: var(--brand); color: #fff; }
+    .an-row { cursor: pointer; }
+    .an-row:hover td { background: var(--hover); }
+    .an-serp-row td { background: var(--surface-2); }
+    .an-serp-h { font-size: 11px; color: var(--muted); padding: 7px 2px 4px; }
+    .an-serp { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 2px 8px; }
+    .an-chip { font-size: 11.5px; background: var(--card); border: 1px solid var(--line);
+      border-radius: 6px; padding: 2px 8px; }
+    .an-chip.me { background: var(--brand); border-color: var(--brand); color: #fff; font-weight: 700; }
   </style>
 </head>
 <body>
@@ -461,6 +469,14 @@
     loadLanguages();
     renderTableApps();
 
+    // Делегирование клика по строкам таблицы анализа — разворот топа выдачи.
+    document.getElementById('urlResult').addEventListener('click', (e) => {
+      const row = e.target.closest && e.target.closest('tr.an-row');
+      if (!row) return;
+      const term = row.getAttribute('data-term');
+      if (term != null) anToggleSerp(term);
+    });
+
     async function findApps() {
       const q = document.getElementById('appQuery').value.trim();
       const geo = document.getElementById('geo').value;
@@ -697,6 +713,8 @@
 
     // --- Анализ приложения (FoxData-style) ---
     let AN = { d: null, filter: 'all', search: '', meta: null };
+    let anExpanded = null;   // развёрнутый ключ (топ выдачи)
+    let anSerp = {};         // term -> { loading?, error?, total?, apps? }
 
     function anEsc(s) {
       return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -733,6 +751,15 @@
     function setAnFilter(f) { AN.filter = (AN.filter === f ? 'all' : f); renderAnalysis(); }
     function anSearch(v) { AN.search = v; renderAnalysisTable(); }
 
+    function anSerpHtml(term) {
+      const s = anSerp[term];
+      if (!s || s.loading) return '<div class="muted" style="padding:8px 2px">Загружаю выдачу…</div>';
+      if (s.error) return '<div class="muted" style="padding:8px 2px">Не удалось загрузить выдачу.</div>';
+      if (!s.apps || !s.apps.length) return '<div class="muted" style="padding:8px 2px">—</div>';
+      return `<div class="an-serp-h">Топ выдачи по «${anEsc(term)}» · ${s.apps.length}/${s.total}</div>
+        <div class="an-serp">${s.apps.map(a => `<span class="an-chip${a.isTarget ? ' me' : ''}">${a.position} · ${anEsc(a.title)}</span>`).join('')}</div>`;
+    }
+
     function renderAnalysisTable() {
       const c = document.getElementById('anTable');
       if (!c) return;
@@ -743,15 +770,42 @@
       }
       c.innerHTML = `<table>
         <tr><th>Ключ</th><th>Позиция</th><th>Спрос</th><th>Насыщенность</th><th>Сложность</th><th>Результаты</th></tr>
-        ${rows.map(k => `<tr>
-          <td>${anEsc(k.term)}</td>
-          <td class="${k.rank != null && k.rank <= 10 ? 'rank-top' : ''}">${k.rank != null ? '#' + k.rank : '—'}</td>
-          <td>${k.volume != null ? k.volume : '—'}</td>
-          <td>${k.saturation != null ? k.saturation : '—'}</td>
-          <td>${k.difficulty != null ? k.difficulty : '—'}</td>
-          <td>${k.totalResults != null ? k.totalResults : '—'}</td>
-        </tr>`).join('')}
+        ${rows.map(k => {
+          const open = anExpanded === k.term;
+          const main = `<tr class="an-row${open ? ' open' : ''}" data-term="${anEscAttr(k.term)}" title="Показать топ выдачи">
+            <td>${open ? '▾' : '▸'} ${anEsc(k.term)}</td>
+            <td class="${k.rank != null && k.rank <= 10 ? 'rank-top' : ''}">${k.rank != null ? '#' + k.rank : '—'}</td>
+            <td>${k.volume != null ? k.volume : '—'}</td>
+            <td>${k.saturation != null ? k.saturation : '—'}</td>
+            <td>${k.difficulty != null ? k.difficulty : '—'}</td>
+            <td>${k.totalResults != null ? k.totalResults : '—'}</td>
+          </tr>`;
+          const detail = open ? `<tr class="an-serp-row"><td colspan="6">${anSerpHtml(k.term)}</td></tr>` : '';
+          return main + detail;
+        }).join('')}
       </table>`;
+    }
+
+    function anToggleSerp(term) {
+      if (anExpanded === term) { anExpanded = null; renderAnalysisTable(); return; }
+      anExpanded = term;
+      renderAnalysisTable();
+      if (!anSerp[term]) anLoadSerp(term);
+    }
+
+    async function anLoadSerp(term) {
+      anSerp[term] = { loading: true };
+      if (anExpanded === term) renderAnalysisTable();
+      try {
+        const d = AN.d || {};
+        const q = 'term=' + encodeURIComponent(term)
+          + '&country=' + encodeURIComponent(d.country || 'us')
+          + '&platform=' + (d.platform === 'android' ? 'android' : 'ios')
+          + '&appId=' + encodeURIComponent(d.appId || '');
+        const r = await fetch(API + '/serp?' + q).then(x => x.json());
+        anSerp[term] = r.error ? { error: true } : { apps: r.apps || [], total: r.total || (r.apps || []).length };
+      } catch { anSerp[term] = { error: true }; }
+      if (anExpanded === term) renderAnalysisTable();
     }
 
     function renderAnalysis() {
@@ -814,6 +868,7 @@
       const el = document.getElementById('urlResult');
       if (!url) return;
       AN = { d: null, filter: 'all', search: '', meta: null };
+      anExpanded = null; anSerp = {};
       el.innerHTML = '<p class="muted" style="margin-top:10px">Запускаем анализ…</p>';
       try {
         let state = await fetch(API + '/discover/by-url?url=' + encodeURIComponent(url)
