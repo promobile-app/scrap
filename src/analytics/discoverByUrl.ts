@@ -108,7 +108,28 @@ const STOP_WORDS = new Set([
   'this', 'that', 'you', 'are', 'our', 'all', 'new', 'get', 'use', 'can',
   'has', 'have', 'from', 'about', 'also', 'they', 'them', 'their', 'will',
   'more', 'one', 'two', 'any', 'now', 'best', 'top', 'easy', 'simple',
+  // Технический мусор/обрывки, не являющиеся поисковыми запросами.
+  'com', 'www', 'net', 'org', 'inc', 'ltd', 'llc', 'http', 'https', 'been',
 ]);
+
+/**
+ * Фильтр качества кандидата: отсекает мусор-фразы, которые люди не ищут.
+ * Одиночные слова (≥3 символов, не стоп-слова) — ок. Многословные фразы
+ * оставляем ТОЛЬКО если их подтвердил autocomplete Apple (значит, это реальный
+ * запрос) или это биграмма из названия самого приложения. Так уходят
+ * биграммы-обрывки из описаний/конкурентов ("countries been", "available health").
+ */
+export function isQualityCandidate(
+  term: string,
+  autocompleteConfirmed: { has(k: string): boolean },
+  titleBigrams: { has(k: string): boolean },
+): boolean {
+  const t = term.toLowerCase().trim();
+  const toks = t.split(/\s+/).filter(Boolean);
+  if (toks.length === 0) return false;
+  if (toks.length === 1) return toks[0].length >= 3 && !STOP_WORDS.has(toks[0]);
+  return autocompleteConfirmed.has(t) || titleBigrams.has(t);
+}
 
 function words(s: string): string[] {
   return s
@@ -267,8 +288,13 @@ async function buildCandidates(
     frontier = next.slice(0, FRONTIER_LIMIT);
     depth++;
   }
+  // Жёсткий фильтр качества: одиночные слова — ок, многословные фразы — только
+  // подтверждённые автокомплитом или биграммы из названия приложения.
+  const titleBigramSet = new Set(bigrams(words(title)));
   return {
-    candidates: [...candidates].filter((c) => c.length >= 3).slice(0, MAX_KEYWORDS),
+    candidates: [...candidates]
+      .filter((c) => c.length >= 3 && isQualityCandidate(c, autocompleteSignals, titleBigramSet))
+      .slice(0, MAX_KEYWORDS),
     relevantTokens,
     autocompleteSignals,
   };

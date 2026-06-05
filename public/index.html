@@ -345,9 +345,16 @@
   </main>
 
   <script>
-    // Если дашборд открыт не с самого API (например в панели предпросмотра),
-    // обращаемся к API напрямую на localhost:3000.
-    const API = location.port === '3000' ? '' : 'http://localhost:3000';
+    // База API. Когда дашборд отдаётся самим бэкендом (прод-домен или локальный
+    // :3000) — ходим same-origin (''), т.е. относительными путями на тот же хост.
+    // Только при открытии как файл / в превью на чужом порту целимся в localhost:3000.
+    const API = (function () {
+      const isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+      // Реальный удалённый хост по http(s) (Railway и т.п.) — API на том же origin.
+      if (!isLocal && location.protocol.startsWith('http')) return '';
+      // Локально: same-origin если уже на :3000, иначе явный localhost:3000.
+      return location.port === '3000' ? '' : 'http://localhost:3000';
+    })();
 
     // --- Тема (светлая/тёмная) ---
     function applyTheme(t) {
