@@ -23,6 +23,18 @@ const TOKEN_TTL = '30d';
 const insightsCache = new Map<string, InsightsResult>();
 const VALID_GOALS: Goal[] = ['rank_up', 'expand', 'defend'];
 
+// Отпечаток набора ключей (term+rank). План — чистая функция от (ключи, goal,
+// язык), поэтому кэшируем по содержимому, а не по jobId: тогда фоновый рефреш и
+// смена jobId не вызывают лишнюю пересборку, а реальное изменение данных — вызывает.
+function keywordsFingerprint(keywords: Array<{ term: string; rank: number | null }>): string {
+  let h = 5381;
+  for (const k of keywords) {
+    const s = `${k.term}:${k.rank}`;
+    for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  }
+  return `${keywords.length}.${(h >>> 0).toString(36)}`;
+}
+
 // Кэш выдачи по ключу (term→топ приложений) — тап по ключу не должен каждый раз
 // бить в Apple. isTarget пересчитывается под запрашивающее приложение.
 interface SerpEntry {
@@ -362,7 +374,11 @@ export async function registerExtensionRoutes(app: FastifyInstance): Promise<voi
       const locale = req.body.lang === 'ru' || req.body.lang === 'en'
         ? req.body.lang
         : state.country;
-      const cacheKey = `${jobId}|${goal}|${locale}`;
+      // Ключ кэша по содержимому: приложение+гео+goal+язык+отпечаток ключей.
+      // Не зависит от jobId — переживает фоновый рефреш; меняется только при
+      // изменении набора ключей (пересчёт).
+      const fp = keywordsFingerprint(state.keywords);
+      const cacheKey = `${state.platform}|${state.appId}|${state.country}|${goal}|${locale}|${fp}`;
       const cached = insightsCache.get(cacheKey);
       if (cached) return cached;
       try {
