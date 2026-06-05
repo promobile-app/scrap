@@ -296,9 +296,10 @@
           <h2>История замеров</h2>
           <p class="sub">Сохранённые проверки и динамика позиции — автозамер каждые 3 часа</p>
         </div>
-        <button class="theme-btn" style="margin-left:auto" onclick="loadHistoryAll()">Обновить</button>
+        <button class="theme-btn" id="histToggleBtn" style="margin-left:auto" onclick="toggleHistory()">Показать историю</button>
+        <button class="theme-btn" id="histRefreshBtn" style="margin-left:8px;display:none" onclick="loadHistoryAll()">Обновить</button>
       </div>
-      <div id="historyList">загрузка…</div>
+      <div id="historyList" style="display:none"></div>
     </div>
 
     <div class="card">
@@ -869,7 +870,20 @@
       </svg>`;
     }
 
-    loadHistoryAll();
+    // История замеров свёрнута по умолчанию и грузится лениво (тяжёлый /history/all,
+    // много прокрутки). Разворачивается по кнопке.
+    let historyOpen = false;
+    function toggleHistory() {
+      historyOpen = !historyOpen;
+      const list = document.getElementById('historyList');
+      document.getElementById('histToggleBtn').textContent = historyOpen ? 'Скрыть' : 'Показать историю';
+      document.getElementById('histRefreshBtn').style.display = historyOpen ? '' : 'none';
+      list.style.display = historyOpen ? '' : 'none';
+      if (historyOpen && !list.dataset.loaded) {
+        list.dataset.loaded = '1';
+        loadHistoryAll();
+      }
+    }
 
     async function checkKeyword() {
       if (!selectedApp) return;
