@@ -303,18 +303,16 @@ async function buildCandidates(
     frontier = next.slice(0, FRONTIER_LIMIT);
     depth++;
   }
-  // Жёсткий фильтр качества: одиночные слова — ок, многословные фразы — только
-  // подтверждённые автокомплитом или биграммы из названия приложения. Плюс
-  // фильтр релевантности по ядру (название+жанр+топ описания), чтобы не мерить
-  // ранги для не относящихся к приложению запросов.
+  // Фильтр качества: одиночные слова — ок, многословные фразы — только
+  // подтверждённые автокомплитом или биграммы из названия приложения.
+  // ВАЖНО: жёсткий core-фильтр здесь НЕ применяем — он резал синонимы и бренды
+  // конкурентов ("мікрозайм", "позика", "moneyveo"), по которым приложение реально
+  // ранжируется. Релевантность решаем после замеров: ранжированные оставляем всегда,
+  // безранговые чистит LLM-проход (или эвристика ядра как фолбэк).
   const titleBigramSet = new Set(bigrams(words(title)));
-  const coreTokens = new Set<string>([...titleWords, ...genreWords, ...descWords.slice(0, 20)]);
   return {
     candidates: [...candidates]
-      .filter((c) =>
-        c.length >= 3
-        && isQualityCandidate(c, autocompleteSignals, titleBigramSet)
-        && coreRelevant(c, coreTokens))
+      .filter((c) => c.length >= 3 && isQualityCandidate(c, autocompleteSignals, titleBigramSet))
       .slice(0, MAX_KEYWORDS),
     relevantTokens,
     autocompleteSignals,
@@ -326,25 +324,6 @@ function sortKeywords(keywords: UrlKeyword[]): UrlKeyword[] {
     if ((a.rank === null) !== (b.rank === null)) return a.rank === null ? 1 : -1;
     if (a.rank !== null && b.rank !== null && a.rank !== b.rank) return a.rank - b.rank;
     return b.volume - a.volume;
-  });
-}
-
-/**
- * Финальный фильтр: оставляем кейворды, в которых есть реальный сигнал
- * (приложение в выдаче или ключ имеет заметный объём поиска).
- * Шум типа «term=abc, rank=null, volume=5» отсеиваем — он только захламляет UI.
- */
-function filterSignal(keywords: UrlKeyword[], relevantTokens: Set<string>): UrlKeyword[] {
-  const MIN_VOLUME_WITHOUT_RANK = 30;
-  return keywords.filter((k) => {
-    if (k.rank !== null) return true;
-    if (k.volume >= MIN_VOLUME_WITHOUT_RANK) {
-      // Дополнительно требуем пересечения с пулом релевантных токенов —
-      // чтобы «трендовые, но не наши» подсказки не пролезали.
-      const toks = k.term.toLowerCase().split(/\s+/);
-      return toks.some((t) => relevantTokens.has(t));
-    }
-    return false;
   });
 }
 
@@ -524,20 +503,31 @@ async function runJob(
     // off-topic запросы, которые делят токен с приложением, но про другой продукт
     // ("channels dvr" для YouTube). Один вызов на список кандидатов, до замеров —
     // заодно экономит запросы к Apple. Без ключа/при сбое остаётся эвристика.
+    let llmFiltered = false;
     try {
       const keep = await llmRelevantTerms(appContext, candidates);
-      if (keep) candidates = candidates.filter((c) => keep.has(c.toLowerCase()));
+      if (keep) { candidates = candidates.filter((c) => keep.has(c.toLowerCase())); llmFiltered = true; }
     } catch {
-      // LLM недоступен — не критично, ниже работает coreRelevant.
+      // LLM недоступен — не критично, ниже работает эвристика ядра для безранговых.
     }
 
     await updateDiscoveryJob(jobId, { appTitle: title, total: candidates.length });
 
-    // Финальная сборка списка: на свежем пути — фильтр сигнала (объём+токены),
-    // плюс ВСЕГДА фильтр релевантности по ядру (работает и на кэш-пути), затем сортировка.
+    // Финальная сборка. Главное правило: РАНЖИРОВАННЫЕ ключи не отсекаем никогда —
+    // сам факт ранга доказывает релевантность (так не теряем "мікрозайм", "позика"
+    // и т.п., которых нет в названии/описании). Эвристику ядра применяем только к
+    // безранговым возможностям и только если LLM не почистил кандидаты (иначе
+    // эвристика срезала бы синонимы).
+    const MIN_DEMAND_UNRANKED = 30;
     const finalize = (list: UrlKeyword[]): UrlKeyword[] => {
-      const base = useCached ? list : filterSignal(list, relevantTokens);
-      return sortKeywords(base.filter((k) => coreRelevant(k.term, coreTokens)));
+      const kept = list.filter((k) => {
+        if (k.rank != null) return true; // ранг доказывает релевантность — не режем
+        // Безранговая возможность: достаточный спрос + релевантность (LLM или эвристика ядра).
+        const relevant = llmFiltered || coreRelevant(k.term, coreTokens);
+        if (useCached) return relevant; // на кэш-пути сигнала объёма нет
+        return (k.volume ?? 0) >= MIN_DEMAND_UNRANKED && relevant;
+      });
+      return sortKeywords(kept);
     };
 
     const cachedLookup = async (id: string): Promise<GpAppInfo | null> => {
