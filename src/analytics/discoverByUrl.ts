@@ -233,6 +233,7 @@ async function buildCandidates(
   platform: 'ios' | 'android',
   description = '',
   competitorTitles: string[] = [],
+  competitorDescriptions: string[] = [],
 ): Promise<{ candidates: string[]; relevantTokens: Set<string>; autocompleteSignals: Map<string, number> }> {
   const suggestFn = platform === 'android' ? gpSuggest : suggest;
   // Сигнал спроса по термину: лучшая (наивысшая) позиция в подсказках Apple,
@@ -243,6 +244,11 @@ async function buildCandidates(
   const descWords = topWords(description, 60);
   const genreWords = words(genre);
   const compWords = topWords(competitorTitles.join(' '), 40);
+  // Майнинг ключей конкурентов: их title+description вылизаны под ASO, поэтому
+  // частотные слова из них — это ключи, которые таргетит вся ниша (напр. для
+  // кредитных приложений: мікрозайм, позика, гроші), даже если их нет в НАШЕМ
+  // описании. Берём топ-частотные и прогоняем через autocomplete как сиды.
+  const compDescWords = topWords(competitorDescriptions.join(' '), 50);
 
   // Пул «своих» токенов — по нему фильтруем подсказки из autocomplete,
   // чтобы не утащить нерелевантные ветки (bank → account → login → ...).
@@ -251,6 +257,7 @@ async function buildCandidates(
     ...descWords,
     ...genreWords,
     ...compWords,
+    ...compDescWords,
   ]);
 
   const seedSet = new Set<string>([
@@ -258,6 +265,7 @@ async function buildCandidates(
     ...descWords.slice(0, 40),
     ...genreWords,
     ...compWords,
+    ...compDescWords.slice(0, 30),
     genre.toLowerCase(),
   ].filter((w) => w && w.length >= 3));
   for (const bg of bigrams(titleWords)) seedSet.add(bg);
@@ -447,14 +455,24 @@ async function runJob(
       if (useCached) {
         candidates = persisted;
       } else {
-        const competitors = await gpSearch(app.title, country, 20).catch(() => []);
-        const competitorTitles = competitors
-          .filter((c) => c.appId !== appId)
-          .slice(0, 10)
-          .map((c) => c.title);
+        // Майнинг конкурентов по нескольким сидам (название, топ-слово, жанр).
+        const compSeeds = [...new Set(
+          [app.title, ...words(app.title).slice(0, 2), app.genre]
+            .map((s) => s.trim()).filter((s) => s.length >= 3),
+        )];
+        const compLists = await mapLimit(compSeeds, 3, (s) =>
+          gpSearch(s, country, 20).catch(() => [] as Awaited<ReturnType<typeof gpSearch>>));
+        const seen = new Set<string>();
+        const competitors = compLists.flat().filter((c) => {
+          if (c.appId === appId || seen.has(c.appId)) return false;
+          seen.add(c.appId); return true;
+        }).slice(0, 15);
+        const competitorTitles = competitors.map((c) => c.title);
+        // У Google Play search в выдаче есть summary — используем как мини-описание.
+        const competitorDescriptions = competitors.map((c) => c.summary ?? '');
         const desc = `${app.summary} ${app.description}`.trim();
         const built = await buildCandidates(
-          app.title, app.genre, country, 'android', desc, competitorTitles,
+          app.title, app.genre, country, 'android', desc, competitorTitles, competitorDescriptions,
         );
         candidates = built.candidates;
         relevantTokens = built.relevantTokens;
@@ -477,14 +495,22 @@ async function runJob(
       if (useCached) {
         candidates = persisted;
       } else {
-        const competitorIds = await nativeSearchIds(app.title, country).catch(() => []);
+        // Майнинг конкурентов: ищем по нескольким сидам (название, топ-слова
+        // названия, жанр) и объединяем выдачу — в конкуренты попадают разные
+        // игроки ниши, а не только «копии» по полному названию.
+        const compSeeds = [...new Set(
+          [app.title, ...words(app.title).slice(0, 2), app.primaryGenre]
+            .map((s) => s.trim()).filter((s) => s.length >= 3),
+        )];
+        const idLists = await mapLimit(compSeeds, 4, (s) =>
+          nativeSearchIds(s, country).catch(() => [] as string[]));
+        const competitorIds = [...new Set(idLists.flat())]
+          .filter((id) => id !== String(appId)).slice(0, 15);
         const competitors = competitorIds.length
-          ? await lookupApps(
-              competitorIds.filter((id) => id !== String(appId)).slice(0, 10),
-              country,
-            ).catch(() => [])
+          ? await lookupApps(competitorIds, country).catch(() => [])
           : [];
         const competitorTitles = competitors.map((c) => c.title);
+        const competitorDescriptions = competitors.map((c) => c.description ?? '');
         const genres = (app.genres ?? []).join(' ');
         const built = await buildCandidates(
           app.title,
@@ -493,6 +519,7 @@ async function runJob(
           'ios',
           app.description,
           competitorTitles,
+          competitorDescriptions,
         );
         candidates = built.candidates;
         relevantTokens = built.relevantTokens;
