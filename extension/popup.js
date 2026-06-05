@@ -371,8 +371,8 @@ document.getElementById('payment-cancel').addEventListener('click', () => {
 });
 
 // --- UNLOCKED ---
-let unlockedRanked = [];        // отсортированный список ключей с rank
-let unlockedFilter = 'all';     // 'all' | 'top3' | 'top10'
+let unlockedKeywords = [];      // ВСЕ ключи (ранжированные + возможности), отсортированы
+let unlockedFilter = 'all';     // 'all' | 'ranked' | 'top3' | 'top10'
 let currentGoal = 'rank_up';    // 'rank_up' | 'expand' | 'defend'
 let currentLang = 'en';         // 'en' | 'ru' — язык инсайтов и подписей
 let langExplicit = false;       // пользователь выбрал язык вручную (не трогаем автодетект)
@@ -383,6 +383,8 @@ let insightsReq = 0;            // токен против гонки при б�
 const I18N = {
   en: {
     goals: { rank_up: 'Rank up', expand: 'Expand', defend: 'Defend' },
+    tbl: { keyword: 'Keyword', rank: 'Rank', demand: 'Demand', diff: 'Diff' },
+    kwEmpty: { all: 'No keywords found.', ranked: 'No ranked keywords.', top3: 'No keywords in Top 3.', top10: 'No keywords in Top 10.' },
     quadCap: 'Quadrant', quadAxis: '· demand × difficulty',
     quad: { quickWins: 'Quick wins', longShots: 'Long shots', pushNow: 'Push now', ignore: 'Ignore' },
     plan: 'Action plan',
@@ -393,6 +395,8 @@ const I18N = {
   },
   ru: {
     goals: { rank_up: 'Рост', expand: 'Охват', defend: 'Защита' },
+    tbl: { keyword: 'Ключ', rank: 'Поз.', demand: 'Спрос', diff: 'Слож.' },
+    kwEmpty: { all: 'Ключи не найдены.', ranked: 'Нет ранжированных ключей.', top3: 'Нет ключей в топ-3.', top10: 'Нет ключей в топ-10.' },
     quadCap: 'Квадрант', quadAxis: '· спрос × сложность',
     quad: { quickWins: 'Быстрые победы', longShots: 'Тяжёлая ниша', pushNow: 'Качать сейчас', ignore: 'Пропустить' },
     plan: 'План действий',
@@ -412,7 +416,14 @@ function renderUnlocked(state) {
   document.getElementById('u-ranked').textContent = s.rankedKeywords;
   document.getElementById('u-top3').textContent = s.top3;
   document.getElementById('u-top10').textContent = s.top10;
-  unlockedRanked = (state.keywords || []).filter((k) => k.rank != null);
+  // Полный список: сначала ранжированные по позиции (1→100), затем возможности
+  // (без позиции) по убыванию спроса.
+  unlockedKeywords = [...(state.keywords || [])].sort((a, b) => {
+    const ar = a.rank == null, br = b.rank == null;
+    if (ar !== br) return ar ? 1 : -1;
+    if (!ar && a.rank !== b.rank) return a.rank - b.rank;
+    return (b.volume || 0) - (a.volume || 0);
+  });
   unlockedFilter = 'all';
   renderKwTable();
 
@@ -430,28 +441,33 @@ function renderUnlocked(state) {
 
 function renderKwTable() {
   const list = document.getElementById('kw-list');
-  // Подсветка активного тайла.
+  if (!list) return;
+  // Подсветка активного тайла (ни один не активен при показе всех).
   ['ranked', 'top3', 'top10'].forEach((f) => {
-    const map = { ranked: 'all', top3: 'top3', top10: 'top10' };
-    document.getElementById('u-tile-' + f)
-      .classList.toggle('active', unlockedFilter === map[f]);
+    document.getElementById('u-tile-' + f).classList.toggle('active', unlockedFilter === f);
   });
-  let rows = unlockedRanked;
-  if (unlockedFilter === 'top3') rows = rows.filter((k) => k.rank <= 3);
-  else if (unlockedFilter === 'top10') rows = rows.filter((k) => k.rank <= 10);
+  let rows = unlockedKeywords;
+  if (unlockedFilter === 'ranked') rows = rows.filter((k) => k.rank != null);
+  else if (unlockedFilter === 'top3') rows = rows.filter((k) => k.rank != null && k.rank <= 3);
+  else if (unlockedFilter === 'top10') rows = rows.filter((k) => k.rank != null && k.rank <= 10);
 
+  const L = t().tbl;
   if (!rows.length) {
-    const msg = unlockedFilter === 'top3' ? 'No keywords in Top 3.'
-      : unlockedFilter === 'top10' ? 'No keywords in Top 10.'
-        : 'No keyword rankings found.';
-    list.innerHTML = `<p class="muted" style="padding:14px;text-align:center">${msg}</p>`;
+    list.innerHTML = `<p class="muted" style="padding:14px;text-align:center">${t().kwEmpty[unlockedFilter] || t().kwEmpty.all}</p>`;
     return;
   }
   list.innerHTML = `<table>
-    <thead><tr><th>Keyword</th><th class="num">Rank</th></tr></thead>
+    <thead><tr>
+      <th>${L.keyword}</th>
+      <th class="num">${L.rank}</th>
+      <th class="num">${L.demand}</th>
+      <th class="num">${L.diff}</th>
+    </tr></thead>
     <tbody>${rows.map((k) => `<tr>
-      <td>${k.term}</td>
-      <td class="num ${k.rank <= 10 ? 'rank-top' : ''}">#${k.rank}</td>
+      <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(k.term)}</td>
+      <td class="num ${k.rank != null && k.rank <= 10 ? 'rank-top' : ''}">${k.rank != null ? '#' + k.rank : '—'}</td>
+      <td class="num">${k.volume != null ? k.volume : '—'}</td>
+      <td class="num">${k.difficulty != null ? k.difficulty : '—'}</td>
     </tr>`).join('')}</tbody></table>`;
 }
 
@@ -459,7 +475,7 @@ function setKwFilter(f) {
   unlockedFilter = unlockedFilter === f ? 'all' : f;
   renderKwTable();
 }
-document.getElementById('u-tile-ranked').addEventListener('click', () => setKwFilter('all'));
+document.getElementById('u-tile-ranked').addEventListener('click', () => setKwFilter('ranked'));
 document.getElementById('u-tile-top3').addEventListener('click', () => setKwFilter('top3'));
 document.getElementById('u-tile-top10').addEventListener('click', () => setKwFilter('top10'));
 
@@ -493,6 +509,8 @@ function renderLangUI() {
   document.querySelectorAll('#lang-seg button').forEach((b) => {
     b.classList.toggle('active', b.dataset.lang === currentLang);
   });
+  // Перерисовать таблицу ключей — её заголовки тоже локализованы.
+  if (unlockedKeywords && unlockedKeywords.length) renderKwTable();
 }
 
 function moveClass(action, quickWins) {
