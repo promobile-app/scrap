@@ -359,16 +359,6 @@
       <div id="trackResult" class="muted" style="margin-top:10px"></div>
     </div>
 
-    <div class="card">
-      <div class="card-head">
-        <div class="card-ico">🏆</div>
-        <div>
-          <h2>Топ-чарт</h2>
-          <p class="sub">Топ бесплатных приложений выбранной страны</p>
-        </div>
-      </div>
-      <div id="chart">загрузка…</div>
-    </div>
   </main>
 
   <script>
@@ -467,7 +457,6 @@
       const android = platformOf() === 'android';
       document.getElementById('lang').style.display = android ? 'none' : '';
       document.getElementById('discoverBtn').style.display = android ? 'none' : '';
-      loadChart();
     }
     loadLanguages();
     renderTableApps();
@@ -1090,16 +1079,6 @@
       el.textContent = d.error ? ('Ошибка: ' + d.error) : ('Отслеживается: ' + JSON.stringify(d.tracked));
     }
 
-    async function loadChart() {
-      const geo = document.getElementById('geo').value;
-      const d = await fetch(API + '/charts?country=' + geo + '&platform=' + platformOf())
-        .then(r => r.json());
-      document.getElementById('chart').innerHTML =
-        '<table><tr><th>#</th><th>Приложение</th><th>Разработчик</th></tr>' +
-        d.slice(0, 20).map(e => `<tr><td>${e.position}</td><td>${e.title}</td><td>${e.developer}</td></tr>`).join('') +
-        '</table>';
-    }
-    loadChart();
   </script>
 </body>
 </html>
