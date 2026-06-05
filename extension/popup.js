@@ -373,6 +373,9 @@ document.getElementById('payment-cancel').addEventListener('click', () => {
 // --- UNLOCKED ---
 let unlockedKeywords = [];      // ВСЕ ключи (ранжированные + возможности), отсортированы
 let unlockedFilter = 'all';     // 'all' | 'ranked' | 'top3' | 'top10'
+let currentApp = { appId: '', country: 'us', platform: 'ios' }; // для SERP-запросов
+let expandedTerm = null;        // развёрнутый ключ (показываем топ выдачи)
+const serpCache = {};           // term -> { loading?, error?, total?, apps? }
 let currentGoal = 'rank_up';    // 'rank_up' | 'expand' | 'defend'
 let currentLang = 'en';         // 'en' | 'ru' — язык инсайтов и подписей
 let langExplicit = false;       // пользователь выбрал язык вручную (не трогаем автодетект)
@@ -385,6 +388,7 @@ const I18N = {
     goals: { rank_up: 'Rank up', expand: 'Expand', defend: 'Defend' },
     download: '⬇ Download Excel', reanalyze: '↻ Re-analyze',
     aiOn: 'AI', aiOff: 'rules',
+    serpLoading: 'Loading results…', serpError: "Couldn't load results.", serpTop: 'Top results for',
     tbl: { keyword: 'Keyword', rank: 'Rank', demand: 'Demand', diff: 'Diff' },
     kwEmpty: { all: 'No keywords found.', ranked: 'No ranked keywords.', top3: 'No keywords in Top 3.', top10: 'No keywords in Top 10.' },
     quadCap: 'Quadrant', quadAxis: '· demand × difficulty',
@@ -399,6 +403,7 @@ const I18N = {
     goals: { rank_up: 'Рост', expand: 'Охват', defend: 'Защита' },
     download: '⬇ Скачать Excel', reanalyze: '↻ Пересчитать',
     aiOn: 'AI', aiOff: 'правила',
+    serpLoading: 'Загружаю выдачу…', serpError: 'Не удалось загрузить выдачу.', serpTop: 'Топ выдачи по',
     tbl: { keyword: 'Ключ', rank: 'Поз.', demand: 'Спрос', diff: 'Слож.' },
     kwEmpty: { all: 'Ключи не найдены.', ranked: 'Нет ранжированных ключей.', top3: 'Нет ключей в топ-3.', top10: 'Нет ключей в топ-10.' },
     quadCap: 'Квадрант', quadAxis: '· спрос × сложность',
@@ -420,6 +425,13 @@ function renderUnlocked(state) {
   document.getElementById('u-ranked').textContent = s.rankedKeywords;
   document.getElementById('u-top3').textContent = s.top3;
   document.getElementById('u-top10').textContent = s.top10;
+  // Контекст приложения для разворота выдачи по ключу.
+  currentApp = {
+    appId: String(state.appId || ''),
+    country: state.country || 'us',
+    platform: state.platform === 'android' ? 'android' : 'ios',
+  };
+  expandedTerm = null;
   // Полный список: сначала ранжированные по позиции (1→100), затем возможности
   // (без позиции) по убыванию спроса.
   unlockedKeywords = [...(state.keywords || [])].sort((a, b) => {
@@ -467,13 +479,68 @@ function renderKwTable() {
       <th class="num">${L.demand}</th>
       <th class="num">${L.diff}</th>
     </tr></thead>
-    <tbody>${rows.map((k) => `<tr>
-      <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(k.term)}</td>
-      <td class="num ${k.rank != null && k.rank <= 10 ? 'rank-top' : ''}">${k.rank != null ? '#' + k.rank : '—'}</td>
-      <td class="num">${k.volume != null ? k.volume : '—'}</td>
-      <td class="num">${k.difficulty != null ? k.difficulty : '—'}</td>
-    </tr>`).join('')}</tbody></table>`;
+    <tbody>${rows.map((k) => {
+      const open = expandedTerm === k.term;
+      const main = `<tr class="kw-row${open ? ' open' : ''}" data-term="${escAttr(k.term)}">
+        <td class="kw-term" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(k.term)}</td>
+        <td class="num ${k.rank != null && k.rank <= 10 ? 'rank-top' : ''}">${k.rank != null ? '#' + k.rank : '—'}</td>
+        <td class="num">${k.volume != null ? k.volume : '—'}</td>
+        <td class="num">${k.difficulty != null ? k.difficulty : '—'}</td>
+      </tr>`;
+      const detail = open ? `<tr class="serp-row"><td colspan="4">${serpHtml(k.term)}</td></tr>` : '';
+      return main + detail;
+    }).join('')}</tbody></table>`;
 }
+
+function escAttr(s) {
+  return escHtml(s).replace(/"/g, '&quot;');
+}
+
+// HTML топа выдачи по ключу (внутри развёрнутой строки).
+function serpHtml(term) {
+  const s = serpCache[term];
+  if (!s || s.loading) return `<div class="serp-load"><span class="spinner"></span> ${t().serpLoading}</div>`;
+  if (s.error) return `<div class="serp-load">${t().serpError}</div>`;
+  if (!s.apps || !s.apps.length) return '<div class="serp-load">—</div>';
+  const head = `<div class="serp-head">${t().serpTop} «${escHtml(term)}» · ${s.apps.length}/${s.total}</div>`;
+  const items = s.apps.map((a) => `<div class="serp-item${a.isTarget ? ' me' : ''}">
+    <span class="sp-pos">${a.position}</span>
+    <span class="sp-title">${escHtml(a.title)}</span>
+  </div>`).join('');
+  return head + `<div class="serp">${items}</div>`;
+}
+
+function toggleSerp(term) {
+  if (expandedTerm === term) { expandedTerm = null; renderKwTable(); return; }
+  expandedTerm = term;
+  renderKwTable();
+  if (!serpCache[term]) loadSerp(term);
+}
+
+async function loadSerp(term) {
+  serpCache[term] = { loading: true };
+  if (expandedTerm === term) renderKwTable();
+  try {
+    const q = 'term=' + encodeURIComponent(term)
+      + '&country=' + encodeURIComponent(currentApp.country)
+      + '&platform=' + currentApp.platform
+      + '&appId=' + encodeURIComponent(currentApp.appId);
+    const d = await api('/ext/keyword-apps?' + q);
+    serpCache[term] = { apps: d.apps || [], total: d.total || (d.apps || []).length };
+  } catch (e) {
+    if (e.status === 401) { await logout(); return; }
+    serpCache[term] = { error: true };
+  }
+  if (expandedTerm === term) renderKwTable();
+}
+
+// Делегирование клика по строкам таблицы — раскрытие выдачи.
+document.getElementById('kw-list').addEventListener('click', (e) => {
+  const row = e.target.closest && e.target.closest('tr.kw-row');
+  if (!row) return;
+  const term = row.getAttribute('data-term');
+  if (term != null) toggleSerp(term);
+});
 
 function setKwFilter(f) {
   unlockedFilter = unlockedFilter === f ? 'all' : f;

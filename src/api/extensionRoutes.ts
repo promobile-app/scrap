@@ -11,6 +11,9 @@ import {
 } from '../analytics/discoverByUrl.js';
 import { generateInsights, type Goal, type InsightsResult } from '../analytics/insights.js';
 import { getDiscoveryJobLite } from '../db/repo.js';
+import { nativeSearchIds } from '../scrapers/native.js';
+import { lookupAppsCached } from '../scrapers/appstore.js';
+import { gpSearch } from '../scrapers/googleplay.js';
 
 const TOKEN_TTL = '30d';
 
@@ -19,6 +22,16 @@ const TOKEN_TTL = '30d';
 // открытиях в расширении.
 const insightsCache = new Map<string, InsightsResult>();
 const VALID_GOALS: Goal[] = ['rank_up', 'expand', 'defend'];
+
+// Кэш выдачи по ключу (term→топ приложений) — тап по ключу не должен каждый раз
+// бить в Apple. isTarget пересчитывается под запрашивающее приложение.
+interface SerpEntry {
+  at: number;
+  total: number;
+  apps: Array<{ position: number; appId: string; title: string; isTarget: boolean }>;
+}
+const serpCache = new Map<string, SerpEntry>();
+const SERP_TTL_MS = 10 * 60 * 1000;
 
 function signToken(userId: number): string {
   return jwt.sign({ uid: userId }, config.jwtSecret, { expiresIn: TOKEN_TTL });
@@ -358,6 +371,55 @@ export async function registerExtensionRoutes(app: FastifyInstance): Promise<voi
         return insights;
       } catch (e) {
         return reply.code(400).send({ error: e instanceof Error ? e.message : 'insights error' });
+      }
+    },
+  );
+
+  // --- SERP по ключу: топ выдачи (кто на 1,2,…N месте) ---
+  // Тап по ключу в попапе разворачивает конкурентов по этому запросу.
+  app.get<{ Querystring: { term?: string; country?: string; platform?: string; appId?: string } }>(
+    '/ext/keyword-apps',
+    async (req, reply) => {
+      const uid = bearer(req);
+      if (!uid) return reply.code(401).send({ error: 'unauthorized' });
+      const term = (req.query.term || '').trim();
+      if (!term) return reply.code(400).send({ error: 'term required' });
+      const country = (req.query.country || config.defaultCountry).toLowerCase();
+      const platform = req.query.platform === 'android' ? 'android' : 'ios';
+      const targetId = req.query.appId || '';
+      const LIMIT = 100;
+
+      const cacheKey = `${platform}|${country}|${term.toLowerCase()}`;
+      const cached = serpCache.get(cacheKey);
+      const fresh = cached && Date.now() - cached.at < SERP_TTL_MS ? cached : null;
+
+      try {
+        let apps: Array<{ position: number; appId: string; title: string; isTarget: boolean }>;
+        let total: number;
+        if (fresh) {
+          total = fresh.total;
+          apps = fresh.apps.map((a) => ({ ...a, isTarget: a.appId === targetId }));
+        } else if (platform === 'android') {
+          const results = await gpSearch(term, country, LIMIT);
+          total = results.length;
+          apps = results.slice(0, LIMIT).map((a, i) => ({
+            position: i + 1, appId: a.appId, title: a.title, isTarget: a.appId === targetId,
+          }));
+          serpCache.set(cacheKey, { at: Date.now(), total, apps: apps.map((a) => ({ ...a })) });
+        } else {
+          const ids = await nativeSearchIds(term, country);
+          total = ids.length;
+          const top = await lookupAppsCached(ids.slice(0, LIMIT), country);
+          const byId = new Map(top.map((a) => [String(a.appId), a.title]));
+          apps = ids.slice(0, LIMIT).map((id, i) => ({
+            position: i + 1, appId: String(id), title: byId.get(String(id)) ?? String(id),
+            isTarget: String(id) === targetId,
+          }));
+          serpCache.set(cacheKey, { at: Date.now(), total, apps: apps.map((a) => ({ ...a })) });
+        }
+        return { term, country, platform, total, apps };
+      } catch (e) {
+        return reply.code(502).send({ error: e instanceof Error ? e.message : 'lookup failed' });
       }
     },
   );
