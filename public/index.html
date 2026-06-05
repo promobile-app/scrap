@@ -197,7 +197,30 @@
       th, td { padding: 8px 9px; }
       .app-row img { width: 38px; height: 38px; }
       .app-row button { padding: 8px 12px; font-size: 13px; }
+      .an-tiles { grid-template-columns: repeat(2, 1fr) !important; }
     }
+
+    /* --- Анализ приложения --- */
+    .an-head { display: flex; align-items: center; gap: 14px; background: var(--surface-2);
+      border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin: 14px 0 12px; }
+    .an-ico-fallback { width: 46px; height: 46px; border-radius: 12px; background: var(--brand);
+      display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 18px; flex: none; }
+    .an-meta { flex: 1; min-width: 0; }
+    .an-title { font-weight: 700; font-size: 15px; }
+    .an-sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+    .an-vis { text-align: center; flex: none; }
+    .an-vis-l { color: var(--muted); font-size: 11px; }
+    .an-vis-n { font-size: 28px; font-weight: 800; color: var(--brand); line-height: 1; }
+    .an-tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 12px; }
+    .an-tile { background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px; padding: 12px; text-align: center; }
+    .an-tile-n { font-size: 22px; font-weight: 800; }
+    .an-tile-l { color: var(--muted); font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; margin-top: 4px; }
+    .an-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+    .an-bar input { border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; font: inherit; font-size: 12.5px; background: var(--card); color: var(--ink); }
+    .an-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+    .an-seg button { font: inherit; font-size: 12px; padding: 6px 11px; border: 0; background: var(--card); color: var(--muted); cursor: pointer; }
+    .an-seg button + button { border-left: 1px solid var(--line); }
+    .an-seg button.active { background: var(--brand); color: #fff; }
   </style>
 </head>
 <body>
@@ -217,16 +240,16 @@
   <main>
     <div class="card">
       <div class="card-head">
-        <div class="card-ico">🔗</div>
+        <div class="card-ico">📊</div>
         <div>
-          <h2>Ключи по ссылке</h2>
-          <p class="sub">Вставьте ссылку на приложение в App Store или Google Play — получите релевантные ключи с метриками</p>
+          <h2>Анализ приложения</h2>
+          <p class="sub">Вставьте ссылку на приложение — позиции по ключам, метрики и Visibility Score, как в FoxData</p>
         </div>
       </div>
       <div class="toolbar">
         <input id="urlInput" style="flex:1;min-width:280px"
           placeholder="https://apps.apple.com/ua/app/.../id… или play.google.com/store/apps/details?id=…" />
-        <button onclick="discoverByLink(false)">Получить ключи</button>
+        <button onclick="discoverByLink(false)">Анализировать</button>
         <button class="theme-btn" onclick="discoverByLink(true)"
           title="Подобрать заново, игнорируя кэш">↻ Пересчитать</button>
         <button class="theme-btn" onclick="downloadCsv(API + '/discover/export.csv')"
@@ -239,10 +262,12 @@
       <div class="card-head">
         <div class="card-ico">🎯</div>
         <div>
-          <h2>Подбор ключей по приложению</h2>
-          <p class="sub">Позиция приложения по ключам, объём и сложность</p>
+          <h2>Поиск по названию <span class="muted" style="font-weight:400;font-size:13px">(доп. инструмент)</span></h2>
+          <p class="sub">Найти приложение по названию, проверить отдельный ключ, добавить в массовую таблицу</p>
         </div>
+        <button class="theme-btn" id="legacyToggle" style="margin-left:auto" onclick="toggleLegacyTools()">Показать</button>
       </div>
+      <div id="legacyTools" style="display:none">
       <div class="toolbar">
         <select id="platform" onchange="onPlatformChange()">
           <option value="ios">App Store</option>
@@ -266,6 +291,7 @@
         </div>
         <div id="metricsResult"></div>
         <div id="discoverResult"></div>
+      </div>
       </div>
     </div>
 
@@ -673,63 +699,150 @@
       a.remove();
     }
 
-    function renderUrlJob(d) {
-      const el = document.getElementById('urlResult');
-      const ranked = (d.keywords || []).filter(k => k.rank != null);
-      const queued = d.status === 'pending';
-      const running = d.status === 'running' || queued;
-      const status = queued
-        ? '· в очереди — ждём свободный слот…'
-        : d.status === 'running'
-          ? `· идёт подбор: ${d.processed} / ${d.total || '…'} ключей…`
-          : `· ${ranked.length} ключей с позицией из ${(d.keywords || []).length} найденных`;
-      const head = `<p class="muted" style="margin:10px 0 2px">${platformIcon(d.platform)}
-        ${FLAGS[d.country] || (d.country || '').toUpperCase()} · <b>${d.appTitle || d.appId}</b>
-        ${status}</p>`;
-      if (!ranked.length) {
-        el.innerHTML = head + (running ? ''
-          : '<p class="muted">Приложение не ранжируется ни по одному из найденных ключей.</p>');
+    function toggleLegacyTools() {
+      const b = document.getElementById('legacyTools');
+      const open = b.style.display === 'none';
+      b.style.display = open ? '' : 'none';
+      document.getElementById('legacyToggle').textContent = open ? 'Скрыть' : 'Показать';
+    }
+
+    // --- Анализ приложения (FoxData-style) ---
+    let AN = { d: null, filter: 'all', search: '', meta: null };
+
+    function anEsc(s) {
+      return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+    function anEscAttr(s) { return anEsc(s).replace(/"/g, '&quot;'); }
+
+    // Прозрачная эвристика видимости 0–100 (не метрика Apple). Сумма «очков» по
+    // ранжированным ключам (выше позиция и больше спрос — больше очков), затем
+    // насыщающая кривая s/(s+K): много сильных ключей → ближе к 100, мало → мало.
+    function visibilityScore(keywords) {
+      const pts = (r) => r == null ? 0 : r <= 3 ? 6 : r <= 10 ? 3 : r <= 30 ? 1.5 : r <= 50 ? 0.7 : 0.2;
+      let s = 0;
+      for (const k of keywords) s += pts(k.rank) * (0.5 + (k.volume || 0) / 200);
+      const K = 40;
+      return Math.round(100 * s / (s + K));
+    }
+
+    function anFilteredRows() {
+      let rows = (AN.d && AN.d.keywords ? AN.d.keywords : []).slice();
+      const q = AN.search.trim().toLowerCase();
+      if (q) rows = rows.filter(k => (k.term || '').toLowerCase().includes(q));
+      if (AN.filter === 'ranked') rows = rows.filter(k => k.rank != null);
+      else if (AN.filter === 'top10') rows = rows.filter(k => k.rank != null && k.rank <= 10);
+      else if (AN.filter === 'vol60') rows = rows.filter(k => (k.volume || 0) >= 60);
+      rows.sort((a, b) => {
+        const ar = a.rank == null, br = b.rank == null;
+        if (ar !== br) return ar ? 1 : -1;
+        if (!ar && a.rank !== b.rank) return a.rank - b.rank;
+        return (b.volume || 0) - (a.volume || 0);
+      });
+      return rows;
+    }
+
+    function setAnFilter(f) { AN.filter = (AN.filter === f ? 'all' : f); renderAnalysis(); }
+    function anSearch(v) { AN.search = v; renderAnalysisTable(); }
+
+    function renderAnalysisTable() {
+      const c = document.getElementById('anTable');
+      if (!c) return;
+      const rows = anFilteredRows();
+      if (!rows.length) {
+        c.innerHTML = '<p class="muted" style="padding:10px 0">Ничего не найдено по фильтру.</p>';
         return;
       }
-      const exportBtn = running ? '' : `<button class="theme-btn" style="margin:6px 0"
-        onclick="downloadCsv(API + '/discover/job/${d.jobId}/export.csv')">⬇ Экспорт CSV</button>`;
+      c.innerHTML = `<table>
+        <tr><th>Ключ</th><th>Позиция</th><th>Спрос</th><th>Насыщенность</th><th>Сложность</th><th>Результаты</th></tr>
+        ${rows.map(k => `<tr>
+          <td>${anEsc(k.term)}</td>
+          <td class="${k.rank != null && k.rank <= 10 ? 'rank-top' : ''}">${k.rank != null ? '#' + k.rank : '—'}</td>
+          <td>${k.volume != null ? k.volume : '—'}</td>
+          <td>${k.saturation != null ? k.saturation : '—'}</td>
+          <td>${k.difficulty != null ? k.difficulty : '—'}</td>
+          <td>${k.totalResults != null ? k.totalResults : '—'}</td>
+        </tr>`).join('')}
+      </table>`;
+    }
+
+    function renderAnalysis() {
+      const el = document.getElementById('urlResult');
+      const d = AN.d;
+      if (!d) { el.innerHTML = ''; return; }
+      const kws = d.keywords || [];
+      const ranked = kws.filter(k => k.rank != null);
+      const top3 = ranked.filter(k => k.rank <= 3).length;
+      const top10 = ranked.filter(k => k.rank <= 10).length;
+      const running = d.status === 'pending' || d.status === 'running';
+      const vis = visibilityScore(kws);
+      const m = AN.meta;
+      const icon = m && m.icon
+        ? `<img src="${anEscAttr(m.icon)}" style="width:46px;height:46px;border-radius:12px;object-fit:cover" alt="" />`
+        : `<div class="an-ico-fallback">${anEsc((d.appTitle || '?').slice(0, 1))}</div>`;
+      const sub = m
+        ? `${anEsc(m.primaryGenre || '')} · ★ ${Number(m.rating || 0).toFixed(2)}`
+        : (d.platform === 'android' ? 'Google Play' : 'App Store');
+      const storeLink = m && m.url ? ` · <a href="${anEscAttr(m.url)}" target="_blank" style="color:var(--brand)">в магазине ↗</a>` : '';
+      const labels = { all: 'Все', ranked: 'Ранг', top10: 'Топ-10', vol60: 'Спрос ≥60' };
       el.innerHTML = `
-        ${head}
-        ${exportBtn}
-        <table>
-          <tr><th>Ключ</th><th>Позиция</th><th>Объём</th><th>Сложность</th><th>Конкуренты</th></tr>
-          ${ranked.map(k => `<tr>
-            <td>${k.term}</td>
-            <td class="${k.rank <= 10 ? 'rank-top' : ''}">#${k.rank}</td>
-            <td>${k.volume}</td>
-            <td>${k.difficulty}</td>
-            <td>${k.totalResults}</td>
-          </tr>`).join('')}
-        </table>
-        <p class="muted" style="margin-top:8px">Объём и сложность — приближённые оценки
-        (насыщенность выдачи и сила конкурентов), не точные данные Apple Search Ads.</p>`;
+        <div class="an-head">
+          ${icon}
+          <div class="an-meta">
+            <div class="an-title">${anEsc(d.appTitle || d.appId)}</div>
+            <div class="an-sub">${platformIcon(d.platform)} ${FLAGS[d.country] || (d.country || '').toUpperCase()} · ${sub}${storeLink}</div>
+          </div>
+          <div class="an-vis"><div class="an-vis-l">Visibility</div><div class="an-vis-n">${vis}</div></div>
+        </div>
+        <div class="an-tiles">
+          <div class="an-tile"><div class="an-tile-n">${ranked.length}</div><div class="an-tile-l">Ranked</div></div>
+          <div class="an-tile"><div class="an-tile-n" style="color:var(--green)">${top3}</div><div class="an-tile-l">Top 3</div></div>
+          <div class="an-tile"><div class="an-tile-n" style="color:var(--green)">${top10}</div><div class="an-tile-l">Top 10</div></div>
+          <div class="an-tile"><div class="an-tile-n">${kws.length}</div><div class="an-tile-l">Analyzed</div></div>
+        </div>
+        ${running ? `<p class="muted" style="margin:6px 0 10px">${d.status === 'pending' ? 'В очереди — ждём слот…' : `Идёт анализ: ${d.processed} / ${d.total || '…'} ключей…`}</p>` : ''}
+        <div class="an-bar">
+          <input id="anSearchInput" placeholder="поиск по ключу" oninput="anSearch(this.value)" value="${anEscAttr(AN.search)}" />
+          <span class="an-seg">${['all', 'ranked', 'top10', 'vol60'].map(f =>
+            `<button class="${AN.filter === f ? 'active' : ''}" onclick="setAnFilter('${f}')">${labels[f]}</button>`).join('')}</span>
+          ${running ? '' : `<button class="theme-btn" style="margin-left:auto" onclick="downloadCsv(API + '/discover/job/${d.jobId}/export.csv')">⬇ Экспорт</button>`}
+        </div>
+        <div id="anTable"></div>
+        <p class="muted" style="margin-top:8px">Спрос/насыщенность/сложность — приближённые оценки,
+        не точные данные Apple Search Ads. Visibility — внутренняя эвристика.</p>`;
+      renderAnalysisTable();
+    }
+
+    async function loadAnalysisMeta(state) {
+      if (state.platform !== 'ios' || !/^\d+$/.test(String(state.appId))) return;
+      try {
+        const m = await fetch(API + '/apps/' + state.appId).then(r => r.json());
+        if (m && !m.error) { AN.meta = m; renderAnalysis(); }
+      } catch { /* мета не критична */ }
     }
 
     async function discoverByLink(force) {
       const url = document.getElementById('urlInput').value.trim();
       const el = document.getElementById('urlResult');
       if (!url) return;
-      el.innerHTML = '<p class="muted" style="margin-top:10px">запускаем подбор ключей…</p>';
+      AN = { d: null, filter: 'all', search: '', meta: null };
+      el.innerHTML = '<p class="muted" style="margin-top:10px">Запускаем анализ…</p>';
       try {
         let state = await fetch(API + '/discover/by-url?url=' + encodeURIComponent(url)
           + (force ? '&fresh=1' : '')).then(r => r.json());
         if (state.error) { el.innerHTML = '<p class="muted">Ошибка: ' + state.error + '</p>'; return; }
-        renderUrlJob(state);
+        AN.d = state; renderAnalysis();
         let guard = 0;
         while ((state.status === 'pending' || state.status === 'running') && guard < 500) {
           guard++;
           await new Promise(r => setTimeout(r, 4000));
           state = await fetch(API + '/discover/job/' + state.jobId).then(r => r.json());
           if (state.error && !state.jobId) break;
-          renderUrlJob(state);
+          AN.d = state; renderAnalysis();
         }
         if (state.status === 'error') {
-          el.innerHTML = '<p class="muted">Ошибка подбора: ' + (state.error || '') + '</p>';
+          el.innerHTML = '<p class="muted">Ошибка анализа: ' + (state.error || '') + '</p>';
+        } else if (state.status === 'done') {
+          await loadAnalysisMeta(state);
         }
       } catch (e) {
         el.innerHTML = '<p class="muted">Ошибка запроса: ' + (e.message || e) + '</p>';
