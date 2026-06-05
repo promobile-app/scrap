@@ -9,6 +9,7 @@ import {
   saveMetricCheckBatch,
   type DiscoveryJobRow,
 } from '../db/repo.js';
+import { llmRelevantTerms, type RelevanceAppContext } from './relevance.js';
 
 // Сколько уже сохранённых кандидатов нужно, чтобы пропустить дорогой BFS-этап
 // (генерацию терминов из метаданных / suggestions / конкурентов).
@@ -438,6 +439,8 @@ async function runJob(
     // ОБОИХ путях (и кэш, и свежий) из метаданных приложения, поэтому фильтр
     // релевантности работает даже когда кандидаты пришли из кэша.
     let coreTokens: Set<string> = new Set();
+    // Контекст приложения для LLM-прохода релевантности (если подключён ключ).
+    let appContext: RelevanceAppContext = { title: appId, genre: '' };
     // Сигналы спроса по терминам (autocomplete). Заполняются в свежем BFS;
     // на кэш-пути (useCached) пустые — тогда demand берётся уже из keyword_cache.
     let autocompleteSignals: Map<string, number> = new Map();
@@ -461,6 +464,7 @@ async function runJob(
         ...words(app.title), ...words(app.genre),
         ...topWords(`${app.summary} ${app.description}`, 20),
       ]);
+      appContext = { title: app.title, genre: app.genre, description: `${app.summary} ${app.description}`.trim() };
       if (useCached) {
         candidates = persisted;
       } else {
@@ -486,6 +490,11 @@ async function runJob(
         ...words(`${app.primaryGenre} ${(app.genres ?? []).join(' ')}`),
         ...topWords(app.description ?? '', 20),
       ]);
+      appContext = {
+        title: app.title,
+        genre: `${app.primaryGenre} ${(app.genres ?? []).join(' ')}`.trim(),
+        description: app.description ?? '',
+      };
       if (useCached) {
         candidates = persisted;
       } else {
@@ -511,6 +520,17 @@ async function runJob(
         autocompleteSignals = built.autocompleteSignals;
       }
     }
+    // LLM-проход релевантности (если подключён ANTHROPIC_API_KEY): отсекает
+    // off-topic запросы, которые делят токен с приложением, но про другой продукт
+    // ("channels dvr" для YouTube). Один вызов на список кандидатов, до замеров —
+    // заодно экономит запросы к Apple. Без ключа/при сбое остаётся эвристика.
+    try {
+      const keep = await llmRelevantTerms(appContext, candidates);
+      if (keep) candidates = candidates.filter((c) => keep.has(c.toLowerCase()));
+    } catch {
+      // LLM недоступен — не критично, ниже работает coreRelevant.
+    }
+
     await updateDiscoveryJob(jobId, { appTitle: title, total: candidates.length });
 
     // Финальная сборка списка: на свежем пути — фильтр сигнала (объём+токены),
