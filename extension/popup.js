@@ -373,6 +373,9 @@ document.getElementById('payment-cancel').addEventListener('click', () => {
 // --- UNLOCKED ---
 let unlockedRanked = [];        // отсортированный список ключей с rank
 let unlockedFilter = 'all';     // 'all' | 'top3' | 'top10'
+let currentGoal = 'rank_up';    // 'rank_up' | 'expand' | 'defend'
+let insightsByGoal = {};        // goal -> ответ /ext/insights (для текущей job)
+let insightsReq = 0;            // токен против гонки при быстром переключении goal
 
 function renderUnlocked(state) {
   show('unlocked');
@@ -384,6 +387,14 @@ function renderUnlocked(state) {
   unlockedRanked = (state.keywords || []).filter((k) => k.rank != null);
   unlockedFilter = 'all';
   renderKwTable();
+
+  // AI-план: сбрасываем кэш под новую job, ставим goal по умолчанию и грузим.
+  insightsByGoal = {};
+  currentGoal = 'rank_up';
+  document.querySelectorAll('.goal-pill').forEach((p) =>
+    p.classList.toggle('active', p.dataset.goal === currentGoal));
+  document.getElementById('ai-insights').innerHTML = '';
+  loadInsights();
 }
 
 function renderKwTable() {
@@ -420,6 +431,84 @@ function setKwFilter(f) {
 document.getElementById('u-tile-ranked').addEventListener('click', () => setKwFilter('all'));
 document.getElementById('u-tile-top3').addEventListener('click', () => setKwFilter('top3'));
 document.getElementById('u-tile-top10').addEventListener('click', () => setKwFilter('top10'));
+
+// --- AI INSIGHTS (action plan) ---
+document.querySelectorAll('.goal-pill').forEach((el) => {
+  el.addEventListener('click', () => {
+    if (el.classList.contains('active')) return;
+    currentGoal = el.dataset.goal;
+    document.querySelectorAll('.goal-pill').forEach((p) => p.classList.toggle('active', p === el));
+    loadInsights();
+  });
+});
+
+function moveClass(action, quickWins) {
+  if (action.move === 'monitor') return 'monitor';
+  if (action.move === 'skip') return 'skip';
+  return quickWins.has(action.term) ? 'push-qw' : 'push';
+}
+function moveLabel(cls) {
+  return cls === 'push-qw' ? 'Push · quick win'
+    : cls === 'push' ? 'Push'
+      : cls === 'monitor' ? 'Monitor' : 'Skip';
+}
+function escHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+async function loadInsights() {
+  const box = document.getElementById('ai-insights');
+  if (!box || !currentJobId) { if (box) box.innerHTML = ''; return; }
+  const goal = currentGoal;
+  if (insightsByGoal[goal]) { renderInsights(insightsByGoal[goal]); return; }
+  const reqId = ++insightsReq;
+  box.innerHTML = '<div class="ai-loading"><span class="spinner"></span> Building your action plan…</div>';
+  try {
+    const data = await api('/ext/insights', {
+      method: 'POST',
+      body: JSON.stringify({ jobId: currentJobId, goal }),
+    });
+    insightsByGoal[goal] = data;
+    if (reqId === insightsReq && goal === currentGoal) renderInsights(data);
+  } catch (e) {
+    if (reqId !== insightsReq) return; // ответ устарел — пользователь сменил goal
+    if (e.status === 401) { await logout(); return; }
+    box.innerHTML = '<div class="ai-loading">Couldn\'t build the action plan. '
+      + '<a class="ai-retry" style="color:#5b8bff;cursor:pointer">Retry</a></div>';
+    const r = box.querySelector('.ai-retry');
+    if (r) r.addEventListener('click', () => { delete insightsByGoal[goal]; loadInsights(); });
+  }
+}
+
+function renderInsights(data) {
+  const box = document.getElementById('ai-insights');
+  if (!box) return;
+  const quickWins = new Set((data.quadrant && data.quadrant.quickWins) || []);
+  const actions = (data.actions || []).slice(0, 12);
+  if (!actions.length) { box.innerHTML = ''; return; }
+  const rows = actions.map((a) => {
+    const cls = moveClass(a, quickWins);
+    const rkTop = a.currentRank != null && a.currentRank <= 10;
+    const rk = a.currentRank != null ? '#' + a.currentRank : '—';
+    return `<div class="act ${cls}">
+      <div class="pr">${a.priority}</div>
+      <div class="body">
+        <div class="top">
+          <span class="term">${escHtml(a.term)}</span>
+          <span class="badge ${cls}">${moveLabel(cls)}</span>
+          <span class="rk ${rkTop ? 'rank-top' : ''}">${rk}</span>
+        </div>
+        <div class="why">${escHtml(a.reason)}</div>
+      </div>
+    </div>`;
+  }).join('');
+  const dq = data.meta && data.meta.dataQuality ? data.meta.dataQuality + ' data' : '';
+  box.innerHTML = `
+    <div class="ai-summary"><span class="ic">✦</span><div>${escHtml(data.summary)}</div></div>
+    <div class="plan-head"><span class="lbl">Action plan</span><span class="dq">${dq}</span></div>
+    <div class="plan">${rows}</div>`;
+}
 
 document.getElementById('download-btn').addEventListener('click', downloadExcel);
 

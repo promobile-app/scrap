@@ -37,8 +37,9 @@ export interface UrlKeyword {
   term: string;
   rank: number | null;
   totalResults: number;
-  volume: number; // 5-100
-  difficulty: number; // 5-100
+  volume: number; // 5-100 — теперь это СПРОС (autocomplete-взвешенный), как в volume.ts
+  saturation: number; // 5-100 — насыщенность выдачи (предложение/конкуренция за слово)
+  difficulty: number; // 5-100 — сложность выхода в топ (сила топ-10)
 }
 
 export interface DiscoveryJobState {
@@ -137,9 +138,25 @@ function bigrams(input: string[]): string[] {
   return out;
 }
 
-function volumeFromResults(total: number): number {
+// Насыщенность выдачи — сигнал ПРЕДЛОЖЕНИЯ (сколько приложений бьётся за слово).
+// Раньше это ошибочно отдавалось как «объём». Это НЕ спрос и коррелирует с difficulty.
+export function saturationFromResults(total: number): number {
   const signal = Math.min(1, Math.log10(total + 1) / Math.log10(201));
   return Math.round(5 + signal * 95);
+}
+
+// Оценка СПРОСА (popularity) — та же эвристика, что в analytics/volume.ts:
+// autocomplete-ранг это сигнал спроса (вес 0.6), насыщенность вспомогательный (0.4),
+// плюс штраф за длинный хвост. autocompleteSignal ∈ [0..1] добывается БЕСПЛАТНО на
+// этапе BFS (позиция термина в подсказках Apple) — без доп. запросов к магазину.
+// Если сигнала нет (0) — оценка падает на насыщенность, что честно отражает
+// «спрос не подтверждён автокомплитом».
+function demandFromSignals(autocompleteSignal: number, total: number, term: string): number {
+  const resultSignal = Math.min(1, Math.log10(total + 1) / Math.log10(201));
+  const wordCount = term.trim().split(/\s+/).filter(Boolean).length;
+  const lengthPenalty = wordCount >= 4 ? 0.6 : wordCount === 3 ? 0.8 : 1;
+  const raw = (autocompleteSignal * 0.6 + resultSignal * 0.4) * lengthPenalty;
+  return Math.round(5 + raw * 95);
 }
 
 function difficultyFromRatings(counts: number[]): number {
@@ -180,8 +197,11 @@ async function buildCandidates(
   platform: 'ios' | 'android',
   description = '',
   competitorTitles: string[] = [],
-): Promise<{ candidates: string[]; relevantTokens: Set<string> }> {
+): Promise<{ candidates: string[]; relevantTokens: Set<string>; autocompleteSignals: Map<string, number> }> {
   const suggestFn = platform === 'android' ? gpSuggest : suggest;
+  // Сигнал спроса по термину: лучшая (наивысшая) позиция в подсказках Apple,
+  // нормированная в [0..1]. Собираем по ходу BFS — это бесплатный сигнал спроса.
+  const autocompleteSignals = new Map<string, number>();
 
   const titleWords = words(title);
   const descWords = topWords(description, 60);
@@ -228,9 +248,14 @@ async function buildCandidates(
     );
     const next: string[] = [];
     for (const hints of hintLists) {
-      for (const h of hints) {
-        const hl = h.toLowerCase().trim();
+      const listLen = Math.max(hints.length, 1);
+      for (let idx = 0; idx < hints.length; idx++) {
+        const hl = hints[idx].toLowerCase().trim();
         if (hl.length < 3 || hl.length > 60) continue;
+        // Сигнал спроса: чем выше термин в подсказках, тем популярнее запрос.
+        // Запоминаем лучший сигнал по термину (он мог встретиться в нескольких списках).
+        const sig = 1 - idx / listLen;
+        if (sig > (autocompleteSignals.get(hl) ?? 0)) autocompleteSignals.set(hl, sig);
         if (candidates.has(hl)) continue;
         if (!isRelevant(hl)) continue;
         candidates.add(hl);
@@ -245,6 +270,7 @@ async function buildCandidates(
   return {
     candidates: [...candidates].filter((c) => c.length >= 3).slice(0, MAX_KEYWORDS),
     relevantTokens,
+    autocompleteSignals,
   };
 }
 
@@ -298,7 +324,9 @@ async function cachedKeyword(
   return fresh;
 }
 
-async function iosKeywordData(term: string, country: string): Promise<KeywordData> {
+async function iosKeywordData(
+  term: string, country: string, autocompleteSignal = 0,
+): Promise<KeywordData> {
   return cachedKeyword('ios', country, term, async () => {
     const ids = await nativeSearchIds(term, country);
     // Кэшированный lookup: топовые приложения повторяются между ключами,
@@ -307,7 +335,7 @@ async function iosKeywordData(term: string, country: string): Promise<KeywordDat
     return {
       ids,
       totalResults: ids.length,
-      volume: volumeFromResults(ids.length),
+      volume: demandFromSignals(autocompleteSignal, ids.length, term),
       difficulty: difficultyFromRatings(top.map((a) => a.ratingCount)),
     };
   });
@@ -360,6 +388,9 @@ async function runJob(
     let title = appId;
     let candidates: string[];
     let relevantTokens: Set<string> = new Set();
+    // Сигналы спроса по терминам (autocomplete). Заполняются в свежем BFS;
+    // на кэш-пути (useCached) пустые — тогда demand берётся уже из keyword_cache.
+    let autocompleteSignals: Map<string, number> = new Map();
     const appCache = new Map<string, GpAppInfo | null>();
 
     // Сначала проверяем постоянный словарь кандидатов для этой пары
@@ -390,6 +421,7 @@ async function runJob(
         );
         candidates = built.candidates;
         relevantTokens = built.relevantTokens;
+        autocompleteSignals = built.autocompleteSignals;
       }
     } else {
       const app = await appLookup(Number(appId), country);
@@ -417,6 +449,7 @@ async function runJob(
         );
         candidates = built.candidates;
         relevantTokens = built.relevantTokens;
+        autocompleteSignals = built.autocompleteSignals;
       }
     }
     await updateDiscoveryJob(jobId, { appTitle: title, total: candidates.length });
@@ -430,6 +463,7 @@ async function runJob(
 
     async function processKeyword(term: string): Promise<UrlKeyword | null> {
       try {
+        const signal = autocompleteSignals.get(term) ?? 0;
         if (platform === 'android') {
           const data = await cachedKeyword('android', country, term, async () => {
             const results = await gpSearch(term, country, 250);
@@ -439,21 +473,23 @@ async function runJob(
             return {
               ids: results.map((a) => a.appId),
               totalResults: results.length,
-              volume: volumeFromResults(results.length),
+              volume: demandFromSignals(signal, results.length, term),
               difficulty: difficultyFromRatings(top.map((a) => a?.ratings ?? 0)),
             };
           });
           const idx = data.ids.indexOf(appId);
           return {
             term, rank: idx === -1 ? null : idx + 1,
-            totalResults: data.totalResults, volume: data.volume, difficulty: data.difficulty,
+            totalResults: data.totalResults, volume: data.volume,
+            saturation: saturationFromResults(data.totalResults), difficulty: data.difficulty,
           };
         }
-        const data = await iosKeywordData(term, country);
+        const data = await iosKeywordData(term, country, signal);
         const idx = data.ids.indexOf(appId);
         return {
           term, rank: idx === -1 ? null : idx + 1,
-          totalResults: data.totalResults, volume: data.volume, difficulty: data.difficulty,
+          totalResults: data.totalResults, volume: data.volume,
+          saturation: saturationFromResults(data.totalResults), difficulty: data.difficulty,
         };
       } catch {
         return null;

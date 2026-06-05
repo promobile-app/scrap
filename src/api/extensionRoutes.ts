@@ -7,11 +7,18 @@ import ExcelJS from 'exceljs';
 import { config } from '../config.js';
 import { query } from '../db/pool.js';
 import {
-  startDiscoveryJob, getDiscoveryJobState,
+  startDiscoveryJob, getDiscoveryJobState, saturationFromResults,
 } from '../analytics/discoverByUrl.js';
+import { generateInsights, type Goal, type InsightsResult } from '../analytics/insights.js';
 import { getDiscoveryJobLite } from '../db/repo.js';
 
 const TOKEN_TTL = '30d';
+
+// Кэш инсайтов: данные готовой джобы неизменны, поэтому план по (job, goal, locale)
+// можно не пересчитывать — почти нулевая маржинальная стоимость на повторных
+// открытиях в расширении.
+const insightsCache = new Map<string, InsightsResult>();
+const VALID_GOALS: Goal[] = ['rank_up', 'expand', 'defend'];
 
 function signToken(userId: number): string {
   return jwt.sign({ uid: userId }, config.jwtSecret, { expiresIn: TOKEN_TTL });
@@ -288,9 +295,22 @@ export async function registerExtensionRoutes(app: FastifyInstance): Promise<voi
       sheet.columns = [
         { header: 'Keyword', key: 'term', width: 40 },
         { header: 'Rank', key: 'rank', width: 10 },
+        { header: 'Demand', key: 'demand', width: 12 },
+        { header: 'Saturation', key: 'saturation', width: 12 },
+        { header: 'Difficulty', key: 'difficulty', width: 12 },
+        { header: 'Results', key: 'results', width: 12 },
       ];
       sheet.getRow(1).font = { bold: true };
-      for (const k of ranked) sheet.addRow({ term: k.term, rank: k.rank });
+      for (const k of ranked) {
+        sheet.addRow({
+          term: k.term,
+          rank: k.rank,
+          demand: k.volume,
+          saturation: k.saturation ?? saturationFromResults(k.totalResults),
+          difficulty: k.difficulty,
+          results: k.totalResults,
+        });
+      }
       const buf = await wb.xlsx.writeBuffer();
       reply.header(
         'Content-Type',
@@ -301,6 +321,40 @@ export async function registerExtensionRoutes(app: FastifyInstance): Promise<voi
         `attachment; filename="keywords-report-${state.appId}.xlsx"`,
       );
       return Buffer.from(buf);
+    },
+  );
+
+  // --- AI INSIGHTS (за paywall) ---
+  // Превращает готовую таблицу ключей в приоритизированный план действий.
+  // Работает поверх честных метрик спрос/сложность; отзывы не используются.
+  app.post<{ Body: { jobId?: number; goal?: string } }>(
+    '/ext/insights',
+    async (req, reply) => {
+      const uid = bearer(req);
+      if (!uid) return reply.code(401).send({ error: 'unauthorized' });
+      const jobId = Number(req.body.jobId);
+      if (!jobId) return reply.code(400).send({ error: 'jobId required' });
+      if (!(await jobPaid(jobId, uid))) {
+        return reply.code(403).send({ error: 'payment required' });
+      }
+      const goal: Goal = VALID_GOALS.includes(req.body.goal as Goal)
+        ? (req.body.goal as Goal)
+        : 'rank_up';
+      const state = await getDiscoveryJobState(jobId);
+      if (!state) return reply.code(404).send({ error: 'job not found' });
+      if (state.status !== 'done') {
+        return reply.code(409).send({ error: 'analysis not finished' });
+      }
+      const cacheKey = `${jobId}|${goal}|${state.country}`;
+      const cached = insightsCache.get(cacheKey);
+      if (cached) return cached;
+      try {
+        const insights = await generateInsights(state, { goal, locale: state.country });
+        insightsCache.set(cacheKey, insights);
+        return insights;
+      } catch (e) {
+        return reply.code(400).send({ error: e instanceof Error ? e.message : 'insights error' });
+      }
     },
   );
 

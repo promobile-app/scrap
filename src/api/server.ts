@@ -14,7 +14,7 @@ import { estimateVolume } from '../analytics/volume.js';
 import { estimateDifficulty } from '../analytics/difficulty.js';
 import { discoverKeywords } from '../analytics/discovery.js';
 import {
-  startDiscoveryJob, getDiscoveryJobState, type UrlKeyword,
+  startDiscoveryJob, getDiscoveryJobState, saturationFromResults, type UrlKeyword,
 } from '../analytics/discoverByUrl.js';
 import {
   upsertApp, upsertKeyword, linkAppKeyword,
@@ -259,8 +259,12 @@ app.get<{ Params: { id: string } }>(
     if (!state) return reply.code(404).send({ error: 'job not found' });
     const ranked = state.keywords.filter((k) => k.rank != null);
     const csv = buildCsv(
-      ['Ключ', 'Позиция', 'Объём', 'Сложность', 'Конкуренты'],
-      ranked.map((k) => [k.term, k.rank, k.volume, k.difficulty, k.totalResults]),
+      ['Ключ', 'Позиция', 'Спрос', 'Насыщенность', 'Сложность', 'Результаты'],
+      ranked.map((k) => [
+        k.term, k.rank, k.volume,
+        k.saturation ?? saturationFromResults(k.totalResults),
+        k.difficulty, k.totalResults,
+      ]),
     );
     reply.header('Content-Type', 'text/csv; charset=utf-8');
     reply.header(
@@ -274,7 +278,7 @@ app.get<{ Params: { id: string } }>(
 // Выгрузка ключей по всем приложениям — сгруппировано по приложению.
 app.get('/discover/export.csv', async (_req, reply) => {
   const jobs = await allDoneDiscoveryJobs();
-  const header = ['Ключ', 'Позиция', 'Объём', 'Сложность', 'Конкуренты'];
+  const header = ['Ключ', 'Позиция', 'Спрос', 'Насыщенность', 'Сложность', 'Результаты'];
   const blocks: string[] = [];
   for (const j of jobs) {
     const ranked = ((j.keywords as UrlKeyword[]) ?? []).filter((k) => k.rank != null);
@@ -283,7 +287,11 @@ app.get('/discover/export.csv', async (_req, reply) => {
     const lines = [
       csvRow([`${j.appTitle ?? j.appId} — ${store}, ${j.country.toUpperCase()}`]),
       csvRow(header),
-      ...ranked.map((k) => csvRow([k.term, k.rank, k.volume, k.difficulty, k.totalResults])),
+      ...ranked.map((k) => csvRow([
+        k.term, k.rank, k.volume,
+        k.saturation ?? saturationFromResults(k.totalResults),
+        k.difficulty, k.totalResults,
+      ])),
       '',
     ];
     blocks.push(lines.join('\r\n'));
