@@ -75,6 +75,12 @@ export async function gpEstimateVolume(
   }
   const coverage = prefixes.length ? hitCount / prefixes.length : 0;
 
+  // Пустой gpSearch обычно = заблокированный прокси/IP (Google отдаёт пустую
+  // выдачу). Сигналим в лог, чтобы в проде сразу видеть деградацию.
+  if (results.length === 0) {
+    console.warn(`[gp/volume] gpSearch вернул 0 для "${normalized}" (${country}) — проверь прокси`);
+  }
+
   // Сигнал 3: медиана установок топа (поиск installs не отдаёт — догружаем детали).
   const topDetails = (
     await Promise.all(
