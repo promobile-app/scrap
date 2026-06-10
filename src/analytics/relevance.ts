@@ -30,9 +30,16 @@ const RELEVANCE_TOOL = {
   },
 } as const;
 
-const SYSTEM = `You filter App Store keyword candidates for relevance to ONE specific app.
-Keep a keyword only if a user searching for this app, or for an app in its category/use-case, would plausibly type it.
-DROP keywords that belong to an unrelated product, brand, or vertical — even when they share a word with the app (e.g. for a video-streaming app: drop "channels dvr", "community bank", "device monitor"; keep "watch videos", "music videos", "live tv").
+const SYSTEM = `You filter app store keyword candidates to keep only ones that DESCRIBE one specific app — what it IS or DOES — not the proper names of OTHER apps.
+
+KEEP: generic, descriptive, and category/use-case keywords a user would type to find this kind of app.
+  e.g. for Brawl Stars: "battle royale", "3v3 shooter", "multiplayer games", "gem grab", "moba".
+DROP: the proper name or brand of a DIFFERENT app, game, studio, or company — even in the same category.
+  e.g. for Brawl Stars: drop "zooba", "fortnite", "clash royale", "pubg mobile", "supercell" competitors' brands.
+DROP: keywords from an unrelated product or vertical that merely share a word (e.g. for a video app: drop "channels dvr", "community bank").
+KEEP the app's OWN brand and its own feature names.
+
+Rule of thumb: if the keyword is the NAME of another product, drop it; if it describes a feature, genre, or use-case, keep it.
 Return ONLY keywords copied verbatim from the provided list. Never invent or modify keywords.`;
 
 /**
@@ -87,9 +94,13 @@ export async function llmRelevantTerms(
     for (const r of rel) {
       if (typeof r === 'string' && inputSet.has(r.toLowerCase())) keep.add(r.toLowerCase());
     }
-    // Защита от «модель вернула почти пусто» — не вычищаем весь список вслепую.
+    // Защита только от явного сбоя «модель вернула пусто». РАНЬШЕ тут был ещё
+    // относительный порог (bail при <10% оставленных) — но для приложений в
+    // насыщенной нише (игры) список кандидатов на 80-90% состоит из брендов
+    // конкурентов, и LLM ЗАКОННО оставляет мало. Тот порог ошибочно принимал
+    // это за сбой и отключал фильтр → бренды конкурентов (zooba, fortnite)
+    // проходили. Теперь доверяем модели, пока она вернула хоть что-то осмысленное.
     if (keep.size === 0) return null;
-    if (terms.length >= 10 && keep.size < terms.length * 0.1) return null;
     return keep;
   } catch {
     return null;

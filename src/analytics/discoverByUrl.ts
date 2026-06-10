@@ -297,9 +297,10 @@ async function buildCandidates(
   ].filter((w) => w && w.length >= 3));
   for (const bg of bigrams(titleWords)) seedSet.add(bg);
   for (const bg of bigrams(descWords.slice(0, 20))) seedSet.add(bg);
-  for (const t of competitorTitles.slice(0, 8)) {
-    for (const bg of bigrams(words(t))) seedSet.add(bg);
-  }
+  // НЕ сидируем биграммами названий конкурентов — это их БРЕНДЫ ("squad busters",
+  // "brawl stars"), а не родовые запросы про наше приложение. Родовые ниши берём
+  // из ОПИСАНИЙ конкурентов (compDescWords) и нашего описания. Бренды-одиночки,
+  // просочившиеся через compWords, отсекает LLM-фильтр релевантности ниже.
 
   const seeds = [...seedSet].slice(0, 50);
   const candidates = new Set<string>(seeds);
