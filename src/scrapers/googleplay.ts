@@ -1,10 +1,16 @@
 import gplay from 'google-play-scraper';
+import { request } from 'undici';
 import { config } from '../config.js';
-import { gpRequestOptions } from './proxy.js';
+import { gpRequestOptions, nextDispatcher } from './proxy.js';
 
 /**
- * Скрейпер Google Play. У Play Store нет официального API — библиотека
- * google-play-scraper парсит публичные веб-страницы Play Store.
+ * Скрейпер Google Play. У Play Store нет официального API.
+ *
+ * gplay.app / gplay.suggest берём из google-play-scraper (работают).
+ * НО gplay.search в библиотеке сломан: он ходит в /work/search, который Google
+ * теперь отдаёт пустым, и маппинг приложений устарел. Поэтому поиск реализуем
+ * сами: fetch /store/search + парс встроенного AF_initDataCallback (ds:4).
+ *
  * appId в Google Play — это имя пакета (строка), напр. "com.moneyveo.app".
  */
 
@@ -91,14 +97,117 @@ export async function gpAppLookup(
   }
 }
 
-/** Поисковая выдача Google Play — упорядоченный список приложений. */
+const GP_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+/** Достаёт data-массивы из AF_initDataCallback по ключам ds:N. */
+function parseInitData(html: string): Record<string, unknown> {
+  const re = /AF_initDataCallback\((\{.*?\})\);<\/script>/gs;
+  const out: Record<string, unknown> = {};
+  for (const m of html.matchAll(re)) {
+    const block = m[1]!;
+    const key = block.match(/key:\s*'(ds:\d+)'/)?.[1];
+    const dataRaw = block.match(/data:(\[.*\])\s*,\s*sideChannel/s)?.[1];
+    if (key && dataRaw) {
+      try {
+        out[key] = JSON.parse(dataRaw);
+      } catch {
+        /* пропускаем нечитаемый блок */
+      }
+    }
+  }
+  return out;
+}
+
+const PKG_RE = /^[a-z][\w]*(\.[\w]+)+$/i;
+
+/** Карточка приложения: app = el[0], где app[0][0] = appId (строка), app[3] = title. */
+function isCard(el: unknown): boolean {
+  if (!Array.isArray(el)) return false;
+  const app = el[0];
+  return (
+    Array.isArray(app) &&
+    Array.isArray(app[0]) &&
+    typeof app[0][0] === 'string' &&
+    PKG_RE.test(app[0][0]) &&
+    typeof app[3] === 'string'
+  );
+}
+
+/** Рекурсивно ищет САМЫЙ длинный массив карточек приложений (устойчиво к сдвигу индексов). */
+function findAppList(node: unknown, best: unknown[] = []): unknown[] {
+  if (!Array.isArray(node)) return best;
+  const cards = node.filter(isCard);
+  if (cards.length >= 3 && cards.length > best.length) best = cards;
+  for (const child of node) best = findAppList(child, best);
+  return best;
+}
+
+/** Маппинг одной карточки выдачи в GpAppInfo (поля выдачи; ratings/installs — из деталей). */
+function mapCard(el: unknown): GpAppInfo | null {
+  const app = (el as unknown[])[0] as unknown[];
+  const at = (path: number[]): unknown => path.reduce<unknown>((n, i) => (Array.isArray(n) ? n[i] : undefined), app);
+  const appId = at([0, 0]) as string | undefined;
+  const title = at([3]) as string | undefined;
+  if (!appId || !title) return null;
+  const score = (at([4, 1]) as number | undefined) ?? 0;
+  return {
+    appId,
+    title,
+    developer: (at([14]) as string | undefined) ?? '',
+    score,
+    ratings: 0, // выдача не отдаёт число отзывов — берётся из gpAppLookup
+    installs: '',
+    minInstalls: 0,
+    genre: (at([5]) as string | undefined) ?? '',
+    icon: (at([1, 3, 2]) as string | undefined) ?? '',
+    url: 'https://play.google.com/store/apps/details?id=' + appId,
+    free: (at([8, 1, 0, 0]) as number | undefined) === 0,
+    description: '',
+    summary: '',
+  };
+}
+
+/**
+ * Поисковая выдача Google Play — упорядоченный список приложений.
+ * Свой парсер /store/search (библиотечный gplay.search сломан, см. шапку файла).
+ * Возвращает кластер первой страницы (~20-60 приложений); пагинация — TODO.
+ */
 export async function gpSearch(
   term: string,
   country = config.defaultCountry,
   num = 100,
 ): Promise<GpAppInfo[]> {
-  const results = await gplay.search({ term, country, lang: langOf(country), num, requestOptions: gpRequestOptions() });
-  return (results as GpRaw[]).map(mapApp);
+  const url =
+    `https://play.google.com/store/search?q=${encodeURIComponent(term)}` +
+    `&c=apps&hl=${langOf(country)}&gl=${country}`;
+  const dispatcher = nextDispatcher();
+  const res = await request(url, {
+    method: 'GET',
+    headers: { 'User-Agent': GP_UA, 'Accept-Language': `${langOf(country)};q=0.9` },
+    ...(dispatcher ? { dispatcher } : {}),
+  });
+  if (res.statusCode >= 400) {
+    throw new Error(`gpSearch HTTP ${res.statusCode} для "${term}"`);
+  }
+  const html = await res.body.text();
+  const data = parseInitData(html);
+
+  let list: unknown[] = [];
+  for (const key of Object.keys(data)) {
+    list = findAppList(data[key], list);
+  }
+
+  const apps: GpAppInfo[] = [];
+  const seen = new Set<string>();
+  for (const el of list) {
+    const app = mapCard(el);
+    if (app && !seen.has(app.appId)) {
+      seen.add(app.appId);
+      apps.push(app);
+    }
+  }
+  return apps.slice(0, num);
 }
 
 /** Позиция приложения по ключевому слову в выдаче Google Play. */
