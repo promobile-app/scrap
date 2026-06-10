@@ -8,10 +8,11 @@ import { query } from '../db/pool.js';
 import { appLookup, searchApps, getRank, lookupApps } from '../scrapers/appstore.js';
 import { nativeSearchIds, storeLanguages } from '../scrapers/native.js';
 import { gpSearch, gpAppLookup, gpTopChart } from '../scrapers/googleplay.js';
-import { gpEstimateVolume, gpEstimateDifficulty } from '../analytics/gp.js';
+import { gpEstimateVolume } from '../analytics/googleplay/volume.js';
+import { gpEstimateDifficulty } from '../analytics/googleplay/difficulty.js';
 import { topChart } from '../scrapers/charts.js';
-import { estimateVolume } from '../analytics/volume.js';
-import { estimateDifficulty } from '../analytics/difficulty.js';
+import { estimateVolume } from '../analytics/appstore/volume.js';
+import { estimateDifficulty } from '../analytics/appstore/difficulty.js';
 import { discoverKeywords } from '../analytics/discovery.js';
 import {
   startDiscoveryJob, getDiscoveryJobState, saturationFromResults, type UrlKeyword,

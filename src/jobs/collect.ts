@@ -1,6 +1,6 @@
 import { getRank } from '../scrapers/appstore.js';
 import { getChartPosition } from '../scrapers/charts.js';
-import { estimateVolume } from '../analytics/volume.js';
+import { estimateVolume } from '../analytics/appstore/volume.js';
 import {
   trackedAppKeywords,
   trackedApps,

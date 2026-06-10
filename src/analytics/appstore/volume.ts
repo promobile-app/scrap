@@ -1,7 +1,7 @@
-import { suggest } from '../scrapers/appstore.js';
-import { nativeSearchIds } from '../scrapers/native.js';
-import { isAsaDashConfigured, keywordPopularity } from '../scrapers/asaDashboard.js';
-import { config } from '../config.js';
+import { suggest } from '../../scrapers/appstore.js';
+import { nativeSearchIds } from '../../scrapers/native.js';
+import { isAsaDashConfigured, keywordPopularity } from '../../scrapers/asaDashboard.js';
+import { config } from '../../config.js';
 
 export interface VolumeResult {
   score: number; // 5-100, шкала как popularity у FoxData
