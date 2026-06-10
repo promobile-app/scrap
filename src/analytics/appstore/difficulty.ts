@@ -1,5 +1,5 @@
-import { searchApps, type AppInfo } from '../scrapers/appstore.js';
-import { config } from '../config.js';
+import { searchApps, type AppInfo } from '../../scrapers/appstore.js';
+import { config } from '../../config.js';
 
 export interface DifficultyResult {
   score: number; // 5-100: чем выше, тем труднее выйти в топ

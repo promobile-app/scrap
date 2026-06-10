@@ -15,6 +15,8 @@ export interface GpAppInfo {
   score: number;
   ratings: number;
   installs: string;
+  /** Нижняя граница установок числом (для аналитики). 0 если неизвестно. */
+  minInstalls: number;
   genre: string;
   icon: string;
   url: string;
@@ -40,12 +42,20 @@ interface GpRaw {
   score?: number;
   ratings?: number;
   installs?: string;
+  minInstalls?: number;
   genre?: string;
   icon?: string;
   url?: string;
   free?: boolean;
   description?: string;
   summary?: string;
+}
+
+/** "10,000,000+" / "10 000 000+" → 10000000. Возвращает 0 если не распознано. */
+function parseInstalls(s?: string): number {
+  if (!s) return 0;
+  const digits = s.replace(/[^\d]/g, '');
+  return digits ? Number(digits) : 0;
 }
 
 function mapApp(r: GpRaw): GpAppInfo {
@@ -56,6 +66,7 @@ function mapApp(r: GpRaw): GpAppInfo {
     score: r.score ?? 0,
     ratings: r.ratings ?? 0,
     installs: r.installs ?? '',
+    minInstalls: r.minInstalls ?? parseInstalls(r.installs),
     genre: r.genre ?? '',
     icon: r.icon ?? '',
     url: r.url ?? '',

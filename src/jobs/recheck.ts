@@ -1,8 +1,9 @@
 import { nativeSearchIds } from '../scrapers/native.js';
-import { estimateVolume } from '../analytics/volume.js';
-import { estimateDifficulty } from '../analytics/difficulty.js';
+import { estimateVolume } from '../analytics/appstore/volume.js';
+import { estimateDifficulty } from '../analytics/appstore/difficulty.js';
 import { gpSearch } from '../scrapers/googleplay.js';
-import { gpEstimateVolume, gpEstimateDifficulty } from '../analytics/gp.js';
+import { gpEstimateVolume } from '../analytics/googleplay/volume.js';
+import { gpEstimateDifficulty } from '../analytics/googleplay/difficulty.js';
 import { distinctMetricTargets, saveMetricCheck } from '../db/repo.js';
 
 /**
