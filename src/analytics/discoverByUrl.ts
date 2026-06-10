@@ -1,6 +1,9 @@
 import { appLookup, lookupApps, lookupAppsCached, suggest } from '../scrapers/appstore.js';
 import { nativeSearchIds } from '../scrapers/native.js';
 import { gpAppLookup, gpSearch, gpSuggest, type GpAppInfo } from '../scrapers/googleplay.js';
+import { isAsaDashConfigured, keywordPopularity } from '../scrapers/asaDashboard.js';
+import { isGoogleAdsConfigured, keywordSearchVolumes } from '../scrapers/googleAds.js';
+import { webSearchesSignal } from './googleplay/volume.js';
 import { parseStoreUrl } from '../scrapers/storeUrl.js';
 import {
   createDiscoveryJob, getDiscoveryJob, latestDiscoveryJob, updateDiscoveryJob,
@@ -187,11 +190,18 @@ export function saturationFromResults(total: number): number {
 // этапе BFS (позиция термина в подсказках Apple) — без доп. запросов к магазину.
 // Если сигнала нет (0) — оценка падает на насыщенность, что честно отражает
 // «спрос не подтверждён автокомплитом».
-function demandFromSignals(autocompleteSignal: number, total: number, term: string): number {
+// webSearches (avgMonthlySearches Keyword Planner, только Android) — самый
+// сильный из доступных сигналов реального спроса: если он есть, забирает
+// основной вес, autocomplete/насыщенность становятся вспомогательными.
+function demandFromSignals(
+  autocompleteSignal: number, total: number, term: string, webSearches?: number | null,
+): number {
   const resultSignal = Math.min(1, Math.log10(total + 1) / Math.log10(201));
   const wordCount = term.trim().split(/\s+/).filter(Boolean).length;
   const lengthPenalty = wordCount >= 4 ? 0.6 : wordCount === 3 ? 0.8 : 1;
-  const raw = (autocompleteSignal * 0.6 + resultSignal * 0.4) * lengthPenalty;
+  const raw = webSearches != null
+    ? (autocompleteSignal * 0.3 + resultSignal * 0.2 + webSearchesSignal(webSearches) * 0.5) * lengthPenalty
+    : (autocompleteSignal * 0.6 + resultSignal * 0.4) * lengthPenalty;
   return Math.round(5 + raw * 95);
 }
 
@@ -568,6 +578,31 @@ async function runJob(
 
     await updateDiscoveryJob(jobId, { appTitle: title, total: candidates.length });
 
+    // --- Внешние источники спроса (один батч на весь список — дёшево) ------
+    // iOS: НАСТОЯЩАЯ popularity из дашборда Apple Search Ads (та же шкала
+    // 5-100, что у FoxData) — если есть, она ЗАМЕНЯЕТ эвристический volume.
+    const asaVolumes = new Map<string, number>();
+    if (platform === 'ios' && isAsaDashConfigured()) {
+      try {
+        const rows = await keywordPopularity(candidates, country.toUpperCase());
+        for (const r of rows) if (r.popularity !== null) asaVolumes.set(r.keyword, r.popularity);
+      } catch (e) {
+        console.error(
+          `[asa] batch popularity недоступна (${e instanceof Error ? e.message : e}) — ` +
+            'volume по эвристике. Обнови сессию .asa-session.json!',
+        );
+      }
+    }
+    // Android: web-объёмы Keyword Planner — подмешиваются в demandFromSignals.
+    let webVolumes = new Map<string, number | null>();
+    if (platform === 'android' && isGoogleAdsConfigured()) {
+      try {
+        webVolumes = await keywordSearchVolumes(candidates, country);
+      } catch (e) {
+        console.warn(`[gads] web-объёмы недоступны: ${e instanceof Error ? e.message : e}`);
+      }
+    }
+
     // Финальная сборка. Главное правило: РАНЖИРОВАННЫЕ ключи не отсекаем никогда —
     // сам факт ранга доказывает релевантность (так не теряем "мікрозайм", "позика"
     // и т.п., которых нет в названии/описании). Эвристику ядра применяем только к
@@ -604,7 +639,7 @@ async function runJob(
             return {
               ids: results.map((a) => a.appId),
               totalResults: results.length,
-              volume: demandFromSignals(signal, results.length, term),
+              volume: demandFromSignals(signal, results.length, term, webVolumes.get(term.toLowerCase())),
               difficulty: gpDifficulty(top),
             };
           });
@@ -617,9 +652,11 @@ async function runJob(
         }
         const data = await iosKeywordData(term, country, signal);
         const idx = data.ids.indexOf(appId);
+        // Настоящая ASA popularity (если получена батчем выше) заменяет эвристику.
+        const asa = asaVolumes.get(term.toLowerCase());
         return {
           term, rank: idx === -1 ? null : idx + 1,
-          totalResults: data.totalResults, volume: data.volume,
+          totalResults: data.totalResults, volume: asa ?? data.volume,
           saturation: saturationFromResults(data.totalResults), difficulty: data.difficulty,
         };
       } catch {

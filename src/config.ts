@@ -24,6 +24,22 @@ export const config = {
     // популярности не влияет (popularity глобальна по ключу+стране).
     adamId: Number(process.env.ASA_DASH_ADAM_ID ?? 0),
   },
+  // Веса формул volume/difficulty. Файл создаётся калибровкой
+  // (src/calibrateWeights.ts --write); без него работают дефолты из
+  // analytics/weights.ts.
+  weightsPath: process.env.WEIGHTS_PATH ?? './weights.json',
+  // Google Ads API (Keyword Planner) — web-объёмы поиска как сигнал спроса
+  // для Google Play volume. Все поля пустые => сигнал выключен, работает
+  // эвристика без него.
+  googleAds: {
+    developerToken: process.env.GOOGLE_ADS_DEVELOPER_TOKEN ?? '',
+    clientId: process.env.GOOGLE_ADS_CLIENT_ID ?? '',
+    clientSecret: process.env.GOOGLE_ADS_CLIENT_SECRET ?? '',
+    refreshToken: process.env.GOOGLE_ADS_REFRESH_TOKEN ?? '',
+    customerId: (process.env.GOOGLE_ADS_CUSTOMER_ID ?? '').replace(/-/g, ''),
+    loginCustomerId: (process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID ?? '').replace(/-/g, ''),
+    apiVersion: process.env.GOOGLE_ADS_API_VERSION ?? 'v20',
+  },
   // AI-слой (insights). Без ключа эндпоинт /ext/insights работает на
   // детерминированном правилном фолбэке — продукт не падает.
   anthropic: {

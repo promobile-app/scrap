@@ -1,5 +1,5 @@
 import { nativeSearchIds } from '../scrapers/native.js';
-import { estimateVolume } from '../analytics/appstore/volume.js';
+import { getVolume } from '../analytics/appstore/volume.js';
 import { estimateDifficulty } from '../analytics/appstore/difficulty.js';
 import { gpSearch } from '../scrapers/googleplay.js';
 import { gpEstimateVolume } from '../analytics/googleplay/volume.js';
@@ -33,7 +33,7 @@ export async function recheckAll(): Promise<number> {
       } else {
         const [ids, volume, difficulty] = await Promise.all([
           nativeSearchIds(t.term, t.country, t.language ?? undefined),
-          estimateVolume(t.term, t.country),
+          getVolume(t.term, t.country),
           estimateDifficulty(t.term, t.country),
         ]);
         const idx = ids.indexOf(t.appId);

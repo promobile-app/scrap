@@ -2,6 +2,7 @@ import { suggest } from '../../scrapers/appstore.js';
 import { nativeSearchIds } from '../../scrapers/native.js';
 import { isAsaDashConfigured, keywordPopularity } from '../../scrapers/asaDashboard.js';
 import { config } from '../../config.js';
+import { getWeights, weightedScore } from '../weights.js';
 
 export interface VolumeResult {
   score: number; // 5-100, шкала как popularity у FoxData
@@ -12,6 +13,7 @@ export interface VolumeResult {
     hint: number; // позиция/наличие в autocomplete
     coverage: number; // на скольких префиксах термин всплывает
     results: number; // насыщенность выдачи
+    lengthPenalty: number; // штраф за длинный хвост (множитель, не вес)
   };
 }
 
@@ -78,15 +80,19 @@ export async function estimateVolume(
   const words = normalized.split(/\s+/).length;
   const lengthPenalty = words >= 4 ? 0.55 : words === 3 ? 0.75 : words === 2 ? 0.92 : 1;
 
-  const raw =
-    (bestHint * 0.45 + coverage * 0.25 + resultSignal * 0.3) * lengthPenalty;
-  const score = Math.round(5 + Math.min(1, raw) * 95);
+  // Веса централизованы в analytics/weights.ts (подбираются калибровкой
+  // по FoxData — src/calibrateWeights.ts).
+  const score = weightedScore(
+    { hint: bestHint, coverage, results: resultSignal },
+    getWeights().iosVolume,
+    lengthPenalty,
+  );
 
   return {
     score,
     source: 'estimated',
     totalResults,
-    signals: { hint: bestHint, coverage, results: resultSignal },
+    signals: { hint: bestHint, coverage, results: resultSignal, lengthPenalty },
   };
 }
 
@@ -101,6 +107,19 @@ export async function estimateVolume(
  * Когда появится приложение — достаточно заполнить ASA_DASH_ADAM_ID, и эта
  * функция автоматически начнёт отдавать source: 'apple_search_ads'.
  */
+// Алерт о деградации ASA — не чаще раза в 10 минут, чтобы не заспамить лог,
+// но и не потерять момент, когда сервис тихо съехал на эвристику.
+let lastAsaWarnAt = 0;
+function warnAsaDegraded(err: unknown): void {
+  const now = Date.now();
+  if (now - lastAsaWarnAt < 10 * 60 * 1000) return;
+  lastAsaWarnAt = now;
+  console.error(
+    `[asa] popularity недоступна (${err instanceof Error ? err.message : err}) — ` +
+      'volume считается эвристикой. Обнови сессию .asa-session.json!',
+  );
+}
+
 export async function getVolume(
   term: string,
   country = config.defaultCountry,
@@ -115,8 +134,10 @@ export async function getVolume(
           totalResults: 0,
         };
       }
-    } catch {
-      // сессия протухла / нет приложения / rate limit — тихо на фолбэк
+    } catch (e) {
+      // сессия протухла / нет приложения / rate limit — фолбэк, но с алертом:
+      // тихая деградация в проде = незаметно неточные данные.
+      warnAsaDegraded(e);
     }
   }
   return estimateVolume(term, country);

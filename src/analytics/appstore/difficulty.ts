@@ -1,5 +1,6 @@
 import { searchApps, type AppInfo } from '../../scrapers/appstore.js';
 import { config } from '../../config.js';
+import { getWeights, weightedScore } from '../weights.js';
 
 export interface DifficultyResult {
   score: number; // 5-100: чем выше, тем труднее выйти в топ
@@ -47,10 +48,20 @@ function ratingsStrength(top: AppInfo[]): number {
   return Math.min(1, median);
 }
 
-function titleMatch(top: AppInfo[], term: string): number {
+// Заточенность топа под ключ: точная фраза в названии — полный балл,
+// все слова вразброс ("Photo Crop Editor" для "photo editor") — половина.
+// FoxData различает эти случаи; раньше вразброс не учитывалось вовсе.
+function titleMatch(top: Array<{ title: string }>, term: string): number {
   if (top.length === 0) return 0;
   const t = norm(term);
-  return top.filter((a) => norm(a.title).includes(t)).length / top.length;
+  const tokens = t.split(/\s+/).filter(Boolean);
+  let credit = 0;
+  for (const a of top) {
+    const title = norm(a.title);
+    if (title.includes(t)) credit += 1;
+    else if (tokens.length > 1 && tokens.every((w) => title.includes(w))) credit += 0.5;
+  }
+  return credit / top.length;
 }
 
 function brandSignal(top: AppInfo[], term: string): number {
@@ -88,16 +99,11 @@ export async function estimateDifficulty(
     competitors: Math.min(1, Math.log10(results.length + 1) / RESULTS_CEIL_LOG),
   };
 
-  const raw =
-    signals.ratingsStrength * 0.45 +
-    signals.titleMatch * 0.25 +
-    signals.brand * 0.2 +
-    signals.competitors * 0.1;
-
   const avgRatingCount = top.reduce((s, a) => s + a.ratingCount, 0) / top.length;
 
   return {
-    score: Math.round(5 + Math.min(1, raw) * 95), // 5..100
+    // Веса централизованы в analytics/weights.ts (калибруются по FoxData).
+    score: weightedScore(signals, getWeights().iosDifficulty),
     competitors: results.length,
     avgRatingCount: Math.round(avgRatingCount),
     signals,
