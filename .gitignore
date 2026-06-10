@@ -2,3 +2,9 @@ node_modules/
 dist/
 .env
 *.log
+
+# Apple Search Ads API keys — секреты, не коммитить
+*.pem
+private-key.pem
+public-key.pem
+.asa-session*
