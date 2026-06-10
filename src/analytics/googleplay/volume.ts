@@ -1,5 +1,7 @@
 import { gpSearch, gpSuggest, gpAppLookup, type GpAppInfo } from '../../scrapers/googleplay.js';
+import { isGoogleAdsConfigured, keywordSearchVolumes } from '../../scrapers/googleAds.js';
 import { config } from '../../config.js';
+import { getWeights, weightedScore } from '../weights.js';
 
 export interface GpVolumeResult {
   score: number; // 5-100
@@ -10,6 +12,8 @@ export interface GpVolumeResult {
     coverage: number; // на скольких префиксах термин всплывает
     installs: number; // медиана установок топа (реальный спрос)
     results: number; // насыщенность выдачи
+    web: number | null; // web-объёмы Keyword Planner (null = не сконфигурирован)
+    lengthPenalty: number; // штраф за длинный хвост (множитель, не вес)
   };
 }
 
@@ -30,6 +34,13 @@ export interface GpVolumeResult {
 const TOP_FOR_INSTALLS = 5; // сколько топ-приложений догружать ради installs
 // Потолок установок для log-нормализации: 100M = «максимум спроса».
 const INSTALLS_CEIL_LOG = Math.log10(100_000_000 + 1);
+// Потолок web-объёмов Keyword Planner: 10M запросов/мес = «максимум спроса».
+const WEB_CEIL_LOG = Math.log10(10_000_000 + 1);
+
+/** avgMonthlySearches → сигнал 0..1 (log-нормализация). */
+export function webSearchesSignal(searches: number): number {
+  return Math.min(1, Math.log10(searches + 1) / WEB_CEIL_LOG);
+}
 
 const norm = (s: string): string => s.toLowerCase().trim();
 
@@ -58,9 +69,17 @@ export async function gpEstimateVolume(
   const normalized = norm(term);
   const prefixes = buildPrefixes(normalized);
 
-  const [hintLists, results] = await Promise.all([
+  const [hintLists, results, webMap] = await Promise.all([
     Promise.all(prefixes.map((p) => gpSuggest(p, country).catch(() => [] as string[]))),
     gpSearch(normalized, country, 250).catch(() => [] as GpAppInfo[]),
+    // Сигнал 5 (опциональный): web-объёмы Keyword Planner. Недоступен/ошибка —
+    // null, веса остальных сигналов перенормируются в weightedScore.
+    isGoogleAdsConfigured()
+      ? keywordSearchVolumes([normalized], country).catch((e: unknown) => {
+          console.warn(`[gads] web-объёмы недоступны: ${e instanceof Error ? e.message : e}`);
+          return new Map<string, number | null>();
+        })
+      : Promise.resolve(new Map<string, number | null>()),
   ]);
 
   // Сигнал 1+2: позиция и покрытие в autocomplete.
@@ -98,15 +117,24 @@ export async function gpEstimateVolume(
   const words = normalized.split(/\s+/).length;
   const lengthPenalty = words >= 4 ? 0.55 : words === 3 ? 0.75 : words === 2 ? 0.92 : 1;
 
-  const raw =
-    (bestHint * 0.35 + coverage * 0.15 + installsSignal * 0.35 + resultSignal * 0.15) *
-    lengthPenalty;
+  const webSearches = webMap.get(normalized);
+  const webSignal = webSearches != null ? webSearchesSignal(webSearches) : null;
+
+  // Веса централизованы в analytics/weights.ts (калибруются по FoxData);
+  // отсутствующий web-сигнал перенормирует остальные веса.
+  const signals = {
+    hint: bestHint,
+    coverage,
+    installs: installsSignal,
+    results: resultSignal,
+    web: webSignal,
+  };
 
   return {
-    score: Math.round(5 + Math.min(1, raw) * 95),
+    score: weightedScore(signals, getWeights().gpVolume, lengthPenalty),
     source: 'estimated',
     totalResults: results.length,
-    signals: { hint: bestHint, coverage, installs: installsSignal, results: resultSignal },
+    signals: { ...signals, lengthPenalty },
   };
 }
 
@@ -120,7 +148,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       console.log(`  hint:     ${r.signals!.hint.toFixed(2)}`);
       console.log(`  coverage: ${r.signals!.coverage.toFixed(2)}`);
       console.log(`  installs: ${r.signals!.installs.toFixed(2)}`);
-      console.log(`  results:  ${r.signals!.results.toFixed(2)} (${r.totalResults})\n`);
+      console.log(`  results:  ${r.signals!.results.toFixed(2)} (${r.totalResults})`);
+      console.log(`  web:      ${r.signals!.web == null ? '— (Google Ads не сконфигурирован)' : r.signals!.web.toFixed(2)}\n`);
     })
     .catch((e) => {
       console.error('❌', e.message);

@@ -1,6 +1,6 @@
 import { getRank } from '../scrapers/appstore.js';
 import { getChartPosition } from '../scrapers/charts.js';
-import { estimateVolume } from '../analytics/appstore/volume.js';
+import { getVolume } from '../analytics/appstore/volume.js';
 import {
   trackedAppKeywords,
   trackedApps,
@@ -48,7 +48,7 @@ export async function collectVolumes(): Promise<number> {
   let count = 0;
   for (const k of keywords) {
     try {
-      const v = await estimateVolume(k.term, k.country);
+      const v = await getVolume(k.term, k.country);
       await saveVolumeEstimate(k.id, v.score, v.source, v.totalResults);
       count++;
     } catch (err) {

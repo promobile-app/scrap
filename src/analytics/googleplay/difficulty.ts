@@ -1,5 +1,6 @@
 import { gpSearch, gpAppLookup, type GpAppInfo } from '../../scrapers/googleplay.js';
 import { config } from '../../config.js';
+import { getWeights, weightedScore } from '../weights.js';
 
 export interface GpDifficultyResult {
   score: number; // 5-100
@@ -28,7 +29,9 @@ export interface GpDifficultyResult {
  */
 
 const TOP_N = 8;
-const INSTALLS_CEIL_LOG = Math.log10(100_000_000 + 1); // 100M = максимум
+// Потолок 1B (не 100M) — иначе все крупные приложения упираются в ~1.0 и
+// difficulty неразличим. Синхронизировано с gpDifficulty в discoverByUrl.ts.
+const INSTALLS_CEIL_LOG = Math.log10(1_000_000_000 + 1);
 const RATING_CEIL_LOG = Math.log10(5_000_000 + 1); // 5M отзывов = максимум
 
 const norm = (s: string): string => s.toLowerCase().trim();
@@ -44,10 +47,19 @@ function medianLog(vals: number[], ceilLog: number): number {
   return Math.min(1, m);
 }
 
+// Точная фраза в названии — полный балл, все слова вразброс — половина
+// (FoxData различает эти случаи).
 function titleMatch(top: GpAppInfo[], term: string): number {
   if (top.length === 0) return 0;
   const t = norm(term);
-  return top.filter((a) => norm(a.title).includes(t)).length / top.length;
+  const tokens = t.split(/\s+/).filter(Boolean);
+  let credit = 0;
+  for (const a of top) {
+    const title = norm(a.title);
+    if (title.includes(t)) credit += 1;
+    else if (tokens.length > 1 && tokens.every((w) => title.includes(w))) credit += 0.5;
+  }
+  return credit / top.length;
 }
 
 function brandSignal(top: GpAppInfo[], term: string): number {
@@ -96,18 +108,13 @@ export async function gpEstimateDifficulty(
     brand: brandSignal(details, term),
   };
 
-  const raw =
-    signals.installsStrength * 0.4 +
-    signals.ratingsStrength * 0.25 +
-    signals.titleMatch * 0.2 +
-    signals.brand * 0.15;
-
   const nonZero = (arr: number[]): number[] => arr.filter((n) => n > 0);
   const avg = (arr: number[]): number =>
     arr.length ? Math.round(arr.reduce((s, n) => s + n, 0) / arr.length) : 0;
 
   return {
-    score: Math.round(5 + Math.min(1, raw) * 95),
+    // Веса централизованы в analytics/weights.ts (калибруются по FoxData).
+    score: weightedScore(signals, getWeights().gpDifficulty),
     competitors: results.length,
     avgRatings: avg(nonZero(ratingsArr)),
     avgInstalls: avg(nonZero(installsArr)),
