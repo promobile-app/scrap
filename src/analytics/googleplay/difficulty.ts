@@ -67,6 +67,10 @@ export async function gpEstimateDifficulty(
 ): Promise<GpDifficultyResult> {
   const results = await gpSearch(norm(term), country, 50);
   const topList = results.slice(0, TOP_N);
+  if (results.length === 0) {
+    // Пустая выдача обычно = заблокированный прокси/IP — сигналим в лог.
+    console.warn(`[gp/difficulty] gpSearch вернул 0 для "${norm(term)}" (${country}) — проверь прокси`);
+  }
   if (topList.length === 0) {
     return {
       score: 5,
