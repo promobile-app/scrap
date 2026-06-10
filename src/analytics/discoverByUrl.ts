@@ -203,6 +203,33 @@ function difficultyFromRatings(counts: number[]): number {
   return Math.round(5 + strength * 95);
 }
 
+// Медиана log-нормализованных значений (устойчивее к выбросам, чем среднее).
+function medianLogNorm(vals: number[], ceilLog: number): number {
+  const logs = vals
+    .filter((n) => n > 0)
+    .map((n) => Math.log10(n + 1) / ceilLog)
+    .sort((a, b) => a - b);
+  if (logs.length === 0) return 0;
+  const mid = Math.floor(logs.length / 2);
+  const m = logs.length % 2 ? logs[mid]! : (logs[mid - 1]! + logs[mid]!) / 2;
+  return Math.min(1, m);
+}
+
+// Difficulty для Google Play: главный сигнал — installs (есть только у GP).
+// Потолок 1B даёт разброс даже среди гигантов: 500M→~0.97, 10M→~0.78 (а не всё в 100,
+// как при расчёте только по отзывам с низким потолком). Отзывы — вторичный сигнал.
+const GP_INSTALLS_CEIL_LOG = Math.log10(1_000_000_000 + 1);
+const GP_RATINGS_CEIL_LOG = Math.log10(5_000_000 + 1);
+
+function gpDifficulty(apps: Array<{ ratings: number; minInstalls: number }>): number {
+  if (apps.length === 0) return 5;
+  const installs = medianLogNorm(apps.map((a) => a.minInstalls), GP_INSTALLS_CEIL_LOG);
+  const ratings = medianLogNorm(apps.map((a) => a.ratings), GP_RATINGS_CEIL_LOG);
+  // Если установок нет (старый кэш без minInstalls) — падаем на отзывы.
+  const strength = installs > 0 ? installs * 0.6 + ratings * 0.4 : ratings;
+  return Math.round(5 + Math.min(1, strength) * 95);
+}
+
 async function mapLimit<T, R>(
   items: T[], limit: number, fn: (item: T) => Promise<R>,
 ): Promise<R[]> {
@@ -570,14 +597,14 @@ async function runJob(
         if (platform === 'android') {
           const data = await cachedKeyword('android', country, term, async () => {
             const results = await gpSearch(term, country, 250);
-            const top = await Promise.all(
-              results.slice(0, 4).map((a) => cachedLookup(a.appId)),
-            );
+            const top = (
+              await Promise.all(results.slice(0, 5).map((a) => cachedLookup(a.appId)))
+            ).filter((a): a is GpAppInfo => Boolean(a));
             return {
               ids: results.map((a) => a.appId),
               totalResults: results.length,
               volume: demandFromSignals(signal, results.length, term),
-              difficulty: difficultyFromRatings(top.map((a) => a?.ratings ?? 0)),
+              difficulty: gpDifficulty(top),
             };
           });
           const idx = data.ids.indexOf(appId);
