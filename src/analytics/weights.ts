@@ -45,7 +45,10 @@ export interface Weights {
 }
 
 export const DEFAULT_WEIGHTS: Weights = {
-  iosVolume: { hint: 0.45, coverage: 0.25, results: 0.3 },
+  // results у iOS почти всегда ≈1 (нативная выдача забита до 200+) — большой
+  // вес давал константные +28 баллов всем ключам и слипание у потолка.
+  // Основной различающий сигнал — hint, взвешенный информативностью префикса.
+  iosVolume: { hint: 0.6, coverage: 0.3, results: 0.1 },
   iosDifficulty: { ratingsStrength: 0.45, titleMatch: 0.25, brand: 0.2, competitors: 0.1 },
   // Без web-сигнала перенормировка даёт прежние пропорции ~0.35/0.14/0.35/0.15.
   gpVolume: { hint: 0.3, coverage: 0.12, installs: 0.3, results: 0.13, web: 0.15 },
