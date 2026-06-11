@@ -4,6 +4,7 @@ import { gpAppLookup, gpSearch, gpSuggest, type GpAppInfo } from '../scrapers/go
 import { isAsaDashConfigured, keywordPopularity } from '../scrapers/asaDashboard.js';
 import { isGoogleAdsConfigured, keywordSearchVolumes } from '../scrapers/googleAds.js';
 import { webSearchesSignal } from './googleplay/volume.js';
+import { logNorm } from './signals.js';
 import { parseStoreUrl } from '../scrapers/storeUrl.js';
 import {
   createDiscoveryJob, getDiscoveryJob, latestDiscoveryJob, updateDiscoveryJob,
@@ -214,27 +215,30 @@ function difficultyFromRatings(counts: number[]): number {
 }
 
 // Медиана log-нормализованных значений (устойчивее к выбросам, чем среднее).
-function medianLogNorm(vals: number[], ceilLog: number): number {
+function medianLogNorm(vals: number[], floor: number, ceil: number): number {
   const logs = vals
     .filter((n) => n > 0)
-    .map((n) => Math.log10(n + 1) / ceilLog)
+    .map((n) => logNorm(n, floor, ceil))
     .sort((a, b) => a - b);
   if (logs.length === 0) return 0;
   const mid = Math.floor(logs.length / 2);
-  const m = logs.length % 2 ? logs[mid]! : (logs[mid - 1]! + logs[mid]!) / 2;
-  return Math.min(1, m);
+  return logs.length % 2 ? logs[mid]! : (logs[mid - 1]! + logs[mid]!) / 2;
 }
 
 // Difficulty для Google Play: главный сигнал — installs (есть только у GP).
 // Потолок 1B даёт разброс даже среди гигантов: 500M→~0.97, 10M→~0.78 (а не всё в 100,
-// как при расчёте только по отзывам с низким потолком). Отзывы — вторичный сигнал.
-const GP_INSTALLS_CEIL_LOG = Math.log10(1_000_000_000 + 1);
-const GP_RATINGS_CEIL_LOG = Math.log10(5_000_000 + 1);
+// как при расчёте только по отзывам с низким потолком). Пол (см. logNorm в
+// signals.ts) убирает завышение нишевых ключей. Отзывы — вторичный сигнал.
+// Синхронизировано с analytics/googleplay/difficulty.ts.
+const GP_INSTALLS_FLOOR = 10_000;
+const GP_INSTALLS_CEIL = 1_000_000_000;
+const GP_RATINGS_FLOOR = 100;
+const GP_RATINGS_CEIL = 5_000_000;
 
 function gpDifficulty(apps: Array<{ ratings: number; minInstalls: number }>): number {
   if (apps.length === 0) return 5;
-  const installs = medianLogNorm(apps.map((a) => a.minInstalls), GP_INSTALLS_CEIL_LOG);
-  const ratings = medianLogNorm(apps.map((a) => a.ratings), GP_RATINGS_CEIL_LOG);
+  const installs = medianLogNorm(apps.map((a) => a.minInstalls), GP_INSTALLS_FLOOR, GP_INSTALLS_CEIL);
+  const ratings = medianLogNorm(apps.map((a) => a.ratings), GP_RATINGS_FLOOR, GP_RATINGS_CEIL);
   // Если установок нет (старый кэш без minInstalls) — падаем на отзывы.
   const strength = installs > 0 ? installs * 0.6 + ratings * 0.4 : ratings;
   return Math.round(5 + Math.min(1, strength) * 95);

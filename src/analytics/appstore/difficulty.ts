@@ -1,6 +1,7 @@
 import { searchApps, type AppInfo } from '../../scrapers/appstore.js';
 import { config } from '../../config.js';
 import { getWeights, weightedScore } from '../weights.js';
+import { logNorm } from '../signals.js';
 
 export interface DifficultyResult {
   score: number; // 5-100: чем выше, тем труднее выйти в топ
@@ -32,7 +33,10 @@ export interface DifficultyResult {
  */
 
 const TOP_N = 10;
-const RATING_CEIL_LOG = Math.log10(1_000_000 + 1); // ~1M отзывов = максимум силы
+// Диапазон log-нормализации отзывов: ≤100 (нишевый топ) → 0, ~1M = максимум
+// силы. Пол убирает завышение difficulty у низкочастотных ключей.
+const RATING_FLOOR = 100;
+const RATING_CEIL = 1_000_000;
 const RESULTS_CEIL_LOG = Math.log10(200 + 1); // нативная выдача ~200 max
 
 const norm = (s: string): string => s.toLowerCase().trim();
@@ -41,11 +45,10 @@ function ratingsStrength(top: AppInfo[]): number {
   if (top.length === 0) return 0;
   // Медиана log10(ratingCount) — устойчивее к одиночным выбросам, чем среднее.
   const logs = top
-    .map((a) => Math.log10((a.ratingCount || 0) + 1) / RATING_CEIL_LOG)
+    .map((a) => logNorm(a.ratingCount || 0, RATING_FLOOR, RATING_CEIL))
     .sort((x, y) => x - y);
   const mid = Math.floor(logs.length / 2);
-  const median = logs.length % 2 ? logs[mid]! : (logs[mid - 1]! + logs[mid]!) / 2;
-  return Math.min(1, median);
+  return logs.length % 2 ? logs[mid]! : (logs[mid - 1]! + logs[mid]!) / 2;
 }
 
 // Заточенность топа под ключ: точная фраза в названии — полный балл,
