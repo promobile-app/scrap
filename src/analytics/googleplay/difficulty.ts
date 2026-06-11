@@ -1,6 +1,7 @@
 import { gpSearch, gpAppLookup, type GpAppInfo } from '../../scrapers/googleplay.js';
 import { config } from '../../config.js';
 import { getWeights, weightedScore } from '../weights.js';
+import { logNorm } from '../signals.js';
 
 export interface GpDifficultyResult {
   score: number; // 5-100
@@ -30,21 +31,23 @@ export interface GpDifficultyResult {
 
 const TOP_N = 8;
 // Потолок 1B (не 100M) — иначе все крупные приложения упираются в ~1.0 и
-// difficulty неразличим. Синхронизировано с gpDifficulty в discoverByUrl.ts.
-const INSTALLS_CEIL_LOG = Math.log10(1_000_000_000 + 1);
-const RATING_CEIL_LOG = Math.log10(5_000_000 + 1); // 5M отзывов = максимум
+// difficulty неразличим. Пол 10k — иначе сигнал не падает ниже ~0.6 даже на
+// нишевых ключах (см. logNorm в signals.ts). Синхронизировано с discoverByUrl.
+const INSTALLS_FLOOR = 10_000;
+const INSTALLS_CEIL = 1_000_000_000;
+const RATING_FLOOR = 100;
+const RATING_CEIL = 5_000_000; // 5M отзывов = максимум
 
 const norm = (s: string): string => s.toLowerCase().trim();
 
-function medianLog(vals: number[], ceilLog: number): number {
+function medianLog(vals: number[], floor: number, ceil: number): number {
   const logs = vals
     .filter((n) => n > 0)
-    .map((n) => Math.log10(n + 1) / ceilLog)
+    .map((n) => logNorm(n, floor, ceil))
     .sort((x, y) => x - y);
   if (logs.length === 0) return 0;
   const mid = Math.floor(logs.length / 2);
-  const m = logs.length % 2 ? logs[mid]! : (logs[mid - 1]! + logs[mid]!) / 2;
-  return Math.min(1, m);
+  return logs.length % 2 ? logs[mid]! : (logs[mid - 1]! + logs[mid]!) / 2;
 }
 
 // Точная фраза в названии — полный балл, все слова вразброс — половина
@@ -110,8 +113,8 @@ export async function gpEstimateDifficulty(
   const ratingsArr = details.map((d) => d.ratings);
 
   const signals = {
-    installsStrength: medianLog(installsArr, INSTALLS_CEIL_LOG),
-    ratingsStrength: medianLog(ratingsArr, RATING_CEIL_LOG),
+    installsStrength: medianLog(installsArr, INSTALLS_FLOOR, INSTALLS_CEIL),
+    ratingsStrength: medianLog(ratingsArr, RATING_FLOOR, RATING_CEIL),
     titleMatch: titleMatch(details, term),
     brand: brandSignal(details, term),
   };

@@ -2,7 +2,7 @@ import { gpSearch, gpSuggest, gpAppLookup, type GpAppInfo } from '../../scrapers
 import { isGoogleAdsConfigured, keywordSearchVolumes } from '../../scrapers/googleAds.js';
 import { config } from '../../config.js';
 import { getWeights, weightedScore } from '../weights.js';
-import { prefixInformativeness } from '../signals.js';
+import { logNorm, prefixInformativeness } from '../signals.js';
 
 export interface GpVolumeResult {
   score: number; // 5-100
@@ -33,14 +33,18 @@ export interface GpVolumeResult {
  */
 
 const TOP_FOR_INSTALLS = 5; // сколько топ-приложений догружать ради installs
-// Потолок установок для log-нормализации: 100M = «максимум спроса».
-const INSTALLS_CEIL_LOG = Math.log10(100_000_000 + 1);
-// Потолок web-объёмов Keyword Planner: 10M запросов/мес = «максимум спроса».
-const WEB_CEIL_LOG = Math.log10(10_000_000 + 1);
+// Диапазон log-нормализации установок: ≤10k (нишевый топ) → 0, 100M = максимум
+// спроса. Пол убирает завышение низкочастотников: без него в любом топе
+// найдутся приложения с 1M+ установок и сигнал не падал ниже ~0.6.
+const INSTALLS_FLOOR = 10_000;
+const INSTALLS_CEIL = 100_000_000;
+// Диапазон web-объёмов Keyword Planner: ≤100 запросов/мес → 0, 10M = максимум.
+const WEB_FLOOR = 100;
+const WEB_CEIL = 10_000_000;
 
-/** avgMonthlySearches → сигнал 0..1 (log-нормализация). */
+/** avgMonthlySearches → сигнал 0..1 (log-нормализация с полом). */
 export function webSearchesSignal(searches: number): number {
-  return Math.min(1, Math.log10(searches + 1) / WEB_CEIL_LOG);
+  return logNorm(searches, WEB_FLOOR, WEB_CEIL);
 }
 
 const norm = (s: string): string => s.toLowerCase().trim();
@@ -111,10 +115,7 @@ export async function gpEstimateVolume(
       results.slice(0, TOP_FOR_INSTALLS).map((a) => gpAppLookup(a.appId, country).catch(() => null)),
     )
   ).filter((a): a is GpAppInfo => Boolean(a));
-  const installsSignal = Math.min(
-    1,
-    Math.log10(medianInstalls(topDetails) + 1) / INSTALLS_CEIL_LOG,
-  );
+  const installsSignal = logNorm(medianInstalls(topDetails), INSTALLS_FLOOR, INSTALLS_CEIL);
 
   // Сигнал 4: насыщенность выдачи.
   const resultSignal = Math.min(1, Math.log10(results.length + 1) / Math.log10(251));
