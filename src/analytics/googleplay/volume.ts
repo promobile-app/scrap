@@ -2,6 +2,7 @@ import { gpSearch, gpSuggest, gpAppLookup, type GpAppInfo } from '../../scrapers
 import { isGoogleAdsConfigured, keywordSearchVolumes } from '../../scrapers/googleAds.js';
 import { config } from '../../config.js';
 import { getWeights, weightedScore } from '../weights.js';
+import { prefixInformativeness } from '../signals.js';
 
 export interface GpVolumeResult {
   score: number; // 5-100
@@ -82,15 +83,19 @@ export async function gpEstimateVolume(
       : Promise.resolve(new Map<string, number | null>()),
   ]);
 
-  // Сигнал 1+2: позиция и покрытие в autocomplete.
+  // Сигнал 1+2: позиция и покрытие в autocomplete. Позиция взвешивается
+  // информативностью префикса (см. signals.ts) — иначе hint ≈ 1 у любого
+  // существующего запроса и volume слипается у потолка.
   let bestHint = 0;
   let hitCount = 0;
-  for (const hints of hintLists) {
+  for (let i = 0; i < hintLists.length; i++) {
+    const hints = hintLists[i]!;
     const idx = hints.findIndex((h) => h === normalized);
     if (idx === -1) continue;
     hitCount++;
     const pos = 1 - idx / Math.max(hints.length, 1);
-    if (pos > bestHint) bestHint = pos;
+    const weighted = pos * prefixInformativeness(prefixes[i]!.length);
+    if (weighted > bestHint) bestHint = weighted;
   }
   const coverage = prefixes.length ? hitCount / prefixes.length : 0;
 

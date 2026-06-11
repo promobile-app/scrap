@@ -3,6 +3,7 @@ import { nativeSearchIds } from '../../scrapers/native.js';
 import { isAsaDashConfigured, keywordPopularity } from '../../scrapers/asaDashboard.js';
 import { config } from '../../config.js';
 import { getWeights, weightedScore } from '../weights.js';
+import { prefixInformativeness } from '../signals.js';
 
 export interface VolumeResult {
   score: number; // 5-100, шкала как popularity у FoxData
@@ -60,15 +61,19 @@ export async function estimateVolume(
   ]);
 
   // Сигнал 1+2: по каждому префиксу ищем позицию термина в подсказках.
-  // hint — лучшая (наивысшая) позиция; coverage — доля префиксов с попаданием.
+  // hint — лучшая позиция, взвешенная информативностью префикса (попадание по
+  // 2-3 буквам — сильный сигнал, по «всему термину без буквы» — почти ничего);
+  // coverage — доля префиксов с попаданием.
   let bestHint = 0;
   let hitCount = 0;
-  for (const hints of hintLists) {
+  for (let i = 0; i < hintLists.length; i++) {
+    const hints = hintLists[i]!;
     const idx = hints.findIndex((h) => h === normalized);
     if (idx === -1) continue;
     hitCount++;
     const pos = 1 - idx / Math.max(hints.length, 1);
-    if (pos > bestHint) bestHint = pos;
+    const weighted = pos * prefixInformativeness(prefixes[i]!.length);
+    if (weighted > bestHint) bestHint = weighted;
   }
   const coverage = prefixes.length ? hitCount / prefixes.length : 0;
 

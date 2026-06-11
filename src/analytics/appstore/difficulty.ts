@@ -65,12 +65,25 @@ function titleMatch(top: Array<{ title: string }>, term: string): number {
 }
 
 function brandSignal(top: AppInfo[], term: string): number {
-  // Брендовость: ключ совпадает с названием/разработчиком одного из топ-3.
+  // Брендовость: ключом называется ОДНО доминирующее приложение (имя или
+  // разработчик в топ-3), а не вся выдача. Если ключ встречается в заголовках
+  // заметной доли топа — это generic-запрос, по которому приложения просто
+  // названы ("habit tracker"), и брендом он не считается (иначе difficulty
+  // завышается у всех средне-частотников и дублирует titleMatch).
   const t = norm(term);
+  const titleShare =
+    top.filter((a) => norm(a.title).includes(t)).length / Math.max(top.length, 1);
+  const generic = titleShare > 0.3;
   return top.slice(0, 3).some((a) => {
     const name = norm(a.title);
     const dev = norm(a.developer);
-    return name === t || dev === t || name.startsWith(t) || dev.includes(t);
+    // Точное совпадение с разработчиком — бренд всегда ("spotify" → Spotify).
+    if (dev === t) return true;
+    // Совпадения по названию (даже точные) не считаются брендом, если ключ
+    // встречается в заголовках многих приложений топа: приложение, названное
+    // буквально "Habit Tracker", не делает запрос брендовым.
+    if (generic) return false;
+    return name === t || name.startsWith(t) || dev.includes(t);
   })
     ? 1
     : 0;

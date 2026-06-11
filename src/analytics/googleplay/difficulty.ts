@@ -63,11 +63,19 @@ function titleMatch(top: GpAppInfo[], term: string): number {
 }
 
 function brandSignal(top: GpAppInfo[], term: string): number {
+  // См. комментарий в appstore/difficulty.ts: бренд = ключом называется ОДНО
+  // доминирующее приложение, а не вся выдача (generic-ключи вроде "habit
+  // tracker" брендом не считаются).
   const t = norm(term);
+  const titleShare =
+    top.filter((a) => norm(a.title).includes(t)).length / Math.max(top.length, 1);
+  const generic = titleShare > 0.3;
   return top.slice(0, 3).some((a) => {
     const name = norm(a.title);
     const dev = norm(a.developer);
-    return name === t || dev === t || name.startsWith(t) || dev.includes(t);
+    if (dev === t) return true;
+    if (generic) return false;
+    return name === t || name.startsWith(t) || dev.includes(t);
   })
     ? 1
     : 0;
