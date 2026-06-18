@@ -227,6 +227,29 @@
     .serp-item.me { background: #1f2640; border-radius: 6px; }
     .serp-item.me .sp-pos, .serp-item.me .sp-title { color: #8aaaff; font-weight: 700; }
     .serp-load { padding: 10px 11px; color: var(--muted); font-size: 12px; }
+
+    /* --- tab bar (App / Keyword) --- */
+    .tabbar { display: none; gap: 6px; margin-bottom: 14px; }
+    .tabbar.show { display: flex; }
+    .tabbar button {
+      font: inherit; font-weight: 700; font-size: 12px; flex: 1;
+      padding: 9px 0; border-radius: 11px; cursor: pointer;
+      background: var(--surface-2); border: 1px solid var(--line); color: var(--muted);
+      transition: .15s;
+    }
+    .tabbar button:hover { background: #2a2a30; }
+    .tabbar button.active { background: #1f2640; border-color: var(--accent); color: #8aaaff; }
+
+    /* --- keyword check screen --- */
+    .kw-ctx { display: flex; align-items: center; gap: 6px; font-size: 11px;
+      color: var(--muted); margin-bottom: 10px; }
+    .mgrid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 14px 0 4px; }
+    .kw-quad { display: inline-flex; align-items: center; gap: 7px; font-size: 11px;
+      font-weight: 700; padding: 6px 11px; border-radius: 9px;
+      border: 1px solid var(--line); background: var(--surface-2); margin: 10px 0 12px; }
+    .kw-quad .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+    #kw-locked { text-align: center; padding: 22px 8px; }
+    #kw-locked .lock { font-size: 26px; margin-bottom: 8px; }
   </style>
 </head>
 <body>
@@ -243,6 +266,12 @@
     <div class="userbar" id="userbar"></div>
   </header>
   <main>
+
+    <!-- TAB BAR (App / Keyword) — виден только залогиненным -->
+    <div class="tabbar" id="tabbar">
+      <button type="button" data-tab="app">App</button>
+      <button type="button" data-tab="keyword">Keyword</button>
+    </div>
 
     <!-- 1. AUTH -->
     <div class="screen" id="screen-auth">
@@ -327,6 +356,22 @@
         <button id="u-reanalyze-btn" class="btn secondary">↻ Re-analyze</button>
       </div>
       <div class="kw-list" id="kw-list"></div>
+    </div>
+
+    <!-- 8. KEYWORD CHECK (платная фича) -->
+    <div class="screen" id="screen-keyword">
+      <div id="kw-locked" style="display:none">
+        <div class="lock">🔒</div>
+        <p class="muted" id="kw-locked-text">
+          Keyword check is a premium feature.<br/>Unlock any app report to enable it.
+        </p>
+      </div>
+      <div id="kw-main">
+        <div class="kw-ctx" id="kw-ctx"></div>
+        <input id="kw-input" type="text" placeholder="Enter a keyword" autocomplete="off" />
+        <button id="kw-check" class="btn">Check</button>
+        <div id="kw-result"></div>
+      </div>
     </div>
 
     <!-- 7. ERROR -->

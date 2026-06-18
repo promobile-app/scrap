@@ -50,11 +50,27 @@ const screens = {
   payment: document.getElementById('screen-payment'),
   unlocked: document.getElementById('screen-unlocked'),
   error: document.getElementById('screen-error'),
+  keyword: document.getElementById('screen-keyword'),
 };
+
+// Экраны, относящиеся к вкладке «App» (анализ открытой страницы стора). 'keyword'
+// живёт в своей вкладке, 'auth' — вне таб-бара.
+const APP_SCREENS = new Set(['unsupported', 'loading', 'summary', 'payment', 'unlocked', 'error']);
+let lastAppScreen = null;
+const tabbarEl = document.getElementById('tabbar');
 
 function show(name) {
   Object.values(screens).forEach((el) => el.classList.remove('active'));
   screens[name].classList.add('active');
+  if (APP_SCREENS.has(name)) lastAppScreen = name;
+  // Таб-бар: только для залогиненных и не на экране авторизации.
+  const showTabs = !!token && name !== 'auth';
+  tabbarEl.classList.toggle('show', showTabs);
+  if (showTabs) {
+    const active = name === 'keyword' ? 'keyword' : 'app';
+    tabbarEl.querySelectorAll('button').forEach((b) =>
+      b.classList.toggle('active', b.dataset.tab === active));
+  }
 }
 
 const userbarEl = document.getElementById('userbar');
@@ -67,6 +83,10 @@ let currentPaymentId = null;
 let pollAnalysisTimer = null;
 let pollPaymentTimer = null;
 let analysisStartedAt = 0;
+let hasPaid = false;               // аккаунт-левел право на платные фичи (keyword check)
+// Контекст проверки ключа — платформа/гео берём из открытой страницы стора.
+let kwContext = { platform: 'ios', country: 'us', detected: false };
+let kwReq = 0;                     // токен против гонки при быстром повторном поиске
 
 // --- API helper ---
 async function api(path, opts = {}) {
@@ -346,6 +366,7 @@ async function pollPayment() {
     const d = await api('/payment/status/' + currentPaymentId);
     if (d.status === 'success') {
       logEvent('payment_success', { paymentId: currentPaymentId });
+      hasPaid = true; // первая оплата открывает и keyword-проверку
       const job = await api('/ext/job/' + currentJobId);
       renderUnlocked(job);
       return;
@@ -398,6 +419,13 @@ const I18N = {
     move: { 'push-qw': 'Push · quick win', push: 'Push', monitor: 'Monitor', skip: 'Skip' },
     loading: 'Building your action plan…',
     errText: "Couldn't build the action plan.", retry: 'Retry',
+    kw: {
+      placeholder: 'Enter a keyword', check: 'Check',
+      demand: 'Demand', difficulty: 'Difficulty', top: 'Top apps',
+      checking: 'Checking…', error: "Couldn't check this keyword.",
+      empty: 'No apps found.', deflt: 'default · open a store page to change',
+      locked: 'Keyword check is a premium feature.<br/>Unlock any app report to enable it.',
+    },
   },
   ru: {
     goals: { rank_up: 'Рост', expand: 'Охват', defend: 'Защита' },
@@ -413,6 +441,13 @@ const I18N = {
     move: { 'push-qw': 'Качать · быстрая победа', push: 'Качать', monitor: 'Держать', skip: 'Пропустить' },
     loading: 'Готовлю план действий…',
     errText: 'Не удалось построить план.', retry: 'Повторить',
+    kw: {
+      placeholder: 'Введите ключевое слово', check: 'Проверить',
+      demand: 'Спрос', difficulty: 'Сложность', top: 'Топ приложений',
+      checking: 'Проверяю…', error: 'Не удалось проверить ключ.',
+      empty: 'Приложения не найдены.', deflt: 'по умолчанию · откройте страницу стора',
+      locked: 'Проверка ключа — премиум-функция.<br/>Откройте любой оплаченный отчёт, чтобы включить.',
+    },
   },
 };
 const t = () => I18N[currentLang] || I18N.en;
@@ -587,6 +622,8 @@ function renderLangUI() {
   if (re) re.textContent = t().reanalyze;
   // Перерисовать таблицу ключей — её заголовки тоже локализованы.
   if (unlockedKeywords && unlockedKeywords.length) renderKwTable();
+  // Подписи экрана проверки ключа.
+  renderKwLang();
 }
 
 function moveClass(action, quickWins) {
@@ -739,6 +776,118 @@ async function downloadExcel() {
   }
 }
 
+// --- TABS + KEYWORD CHECK ---
+tabbarEl.querySelectorAll('button').forEach((b) => {
+  b.addEventListener('click', () => {
+    if (b.dataset.tab === 'keyword') openKeywordTab();
+    else openAppTab();
+  });
+});
+
+function openAppTab() {
+  if (lastAppScreen) show(lastAppScreen);
+  else boot();
+}
+
+// Платформа/гео для проверки ключа — из активной вкладки стора; иначе дефолт.
+async function detectKwContext() {
+  const p = parsePage(await activeTabUrl());
+  kwContext = p
+    ? { platform: p.platform, country: p.country, detected: true }
+    : { platform: 'ios', country: 'us', detected: false };
+}
+
+async function openKeywordTab() {
+  show('keyword');
+  await detectKwContext();
+  renderKwLang();
+  const locked = !hasPaid;
+  document.getElementById('kw-locked').style.display = locked ? 'block' : 'none';
+  document.getElementById('kw-main').style.display = locked ? 'none' : 'block';
+  if (!locked) {
+    const inp = document.getElementById('kw-input');
+    inp.value = '';
+    document.getElementById('kw-result').innerHTML = '';
+    inp.focus();
+  }
+}
+
+// Локализация статичных подписей экрана ключа + строка контекста (флаг + стор).
+function renderKwLang() {
+  const k = t().kw;
+  const inp = document.getElementById('kw-input');
+  if (inp) inp.placeholder = k.placeholder;
+  const btn = document.getElementById('kw-check');
+  if (btn) btn.textContent = k.check;
+  const lt = document.getElementById('kw-locked-text');
+  if (lt) lt.innerHTML = k.locked;
+  const ctx = document.getElementById('kw-ctx');
+  if (ctx) {
+    const flag = FLAGS[kwContext.country] || (kwContext.country || '').toUpperCase();
+    const store = kwContext.platform === 'android' ? 'Google Play' : 'App Store';
+    const hint = kwContext.detected ? '' : ` · ${k.deflt}`;
+    ctx.innerHTML = `<span>${flag}</span><span>${store}${hint}</span>`;
+  }
+}
+
+// Квадрант demand × difficulty для одного ключа.
+function kwQuadrant(demand, difficulty) {
+  const hiD = demand >= 50, hiF = difficulty >= 50;
+  const L = t().quad;
+  if (hiD && !hiF) return { label: L.quickWins, color: '#22c55e' };
+  if (hiD && hiF) return { label: L.pushNow, color: '#3b6ef6' };
+  if (!hiD && hiF) return { label: L.longShots, color: '#d8954a' };
+  return { label: L.ignore, color: '#5f5f66' };
+}
+
+async function checkKeyword() {
+  const inp = document.getElementById('kw-input');
+  const box = document.getElementById('kw-result');
+  const term = (inp.value || '').trim();
+  if (!term) { box.innerHTML = ''; return; }
+  const reqId = ++kwReq;
+  box.innerHTML = `<div class="ai-loading"><span class="spinner"></span> ${t().kw.checking}</div>`;
+  logEvent('keyword_checked', { term, platform: kwContext.platform, country: kwContext.country });
+  try {
+    const q = 'term=' + encodeURIComponent(term)
+      + '&country=' + encodeURIComponent(kwContext.country)
+      + '&platform=' + kwContext.platform;
+    const d = await api('/ext/keyword?' + q);
+    if (reqId === kwReq) renderKeyword(d);
+  } catch (e) {
+    if (reqId !== kwReq) return; // устаревший ответ — пользователь уже ищет другое
+    if (e.status === 401) { await logout(); return; }
+    if (e.status === 403) { hasPaid = false; openKeywordTab(); return; }
+    box.innerHTML = `<p class="err" style="text-align:center">${t().kw.error}</p>`;
+  }
+}
+
+function renderKeyword(d) {
+  const box = document.getElementById('kw-result');
+  const k = t().kw;
+  const vol = (d.volume && d.volume.score) || 0;
+  const diff = (d.difficulty && d.difficulty.score) || 0;
+  const quad = kwQuadrant(vol, diff);
+  const apps = (d.topApps || []).map((a) =>
+    `<div class="serp-item"><span class="sp-pos">${a.position}</span>`
+    + `<span class="sp-title">${escHtml(a.title)}</span></div>`).join('');
+  box.innerHTML = `
+    <div class="mgrid2">
+      <div class="mtile"><div class="mv">${vol}</div><div class="ml">${k.demand}</div></div>
+      <div class="mtile"><div class="mv">${diff}</div><div class="ml">${k.difficulty}</div></div>
+    </div>
+    <div class="kw-quad"><span class="dot" style="background:${quad.color}"></span>${quad.label}</div>
+    <div class="serp-head">${k.top}</div>
+    <div class="serp" style="border:1px solid var(--line);border-radius:12px;max-height:230px">
+      ${apps || `<p class="muted" style="padding:10px;text-align:center">${k.empty}</p>`}
+    </div>`;
+}
+
+document.getElementById('kw-check').addEventListener('click', checkKeyword);
+document.getElementById('kw-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') checkKeyword();
+});
+
 // --- ERROR ---
 function showError(msg) {
   stopAllPolling();
@@ -751,6 +900,8 @@ document.getElementById('error-retry').addEventListener('click', () => startAnal
 async function boot() {
   logEvent('extension_opened');
   if (!token) { show('auth'); renderAuthMode(); return; }
+  // Право на платные фичи — фоном, не блокируя анализ.
+  api('/auth/me').then((d) => { hasPaid = !!d.hasPaid; }).catch(() => {});
   const url = await activeTabUrl();
   if (!parsePage(url)) { show('unsupported'); return; }
   startAnalysis(false);

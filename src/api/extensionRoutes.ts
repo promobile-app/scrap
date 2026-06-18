@@ -12,8 +12,12 @@ import {
 import { generateInsights, type Goal, type InsightsResult } from '../analytics/insights.js';
 import { getDiscoveryJobLite } from '../db/repo.js';
 import { nativeSearchIds } from '../scrapers/native.js';
-import { lookupAppsCached } from '../scrapers/appstore.js';
+import { lookupAppsCached, searchApps } from '../scrapers/appstore.js';
 import { gpSearch } from '../scrapers/googleplay.js';
+import { estimateVolume } from '../analytics/appstore/volume.js';
+import { estimateDifficulty } from '../analytics/appstore/difficulty.js';
+import { gpEstimateVolume } from '../analytics/googleplay/volume.js';
+import { gpEstimateDifficulty } from '../analytics/googleplay/difficulty.js';
 
 const TOKEN_TTL = '30d';
 
@@ -72,6 +76,17 @@ async function jobPaid(jobId: number, userId: number): Promise<boolean> {
   const row = rows[0];
   if (!row) return false;
   return row.paid && row.user_id === userId;
+}
+
+// Аккаунт-левел право на платные фичи (например, проверку ключа): есть ли у
+// пользователя хотя бы один оплаченный анализ. Премиум-подписки нет — оплата
+// привязана к job, поэтому «платил хоть раз» = доступ к keyword-проверке.
+async function userHasPaid(userId: number): Promise<boolean> {
+  const rows = await query<{ exists: boolean }>(
+    'SELECT EXISTS(SELECT 1 FROM discovery_jobs WHERE user_id = $1 AND paid = TRUE) AS exists',
+    [userId],
+  );
+  return rows[0]?.exists === true;
 }
 
 function summarize(keywords: { rank: number | null }[]): {
@@ -138,8 +153,58 @@ export async function registerExtensionRoutes(app: FastifyInstance): Promise<voi
       'SELECT id, email FROM users WHERE id = $1', [uid],
     );
     if (!rows[0]) return reply.code(401).send({ error: 'unauthorized' });
-    return { user: rows[0] };
+    const hasPaid = await userHasPaid(uid);
+    return { user: rows[0], hasPaid };
   });
+
+  // --- KEYWORD CHECK (платная фича) -----------------------------------------
+  // Ввёл ключ → метрики (volume/difficulty) + топ-10 приложений с позициями.
+  // platform=android → Google Play, иначе App Store. Гейт: нужен хотя бы один
+  // оплаченный анализ (userHasPaid) — иначе 403, чтобы фича была действительно
+  // платной на уровне API, а не только скрытой в UI.
+  app.get<{ Querystring: { term?: string; country?: string; platform?: string } }>(
+    '/ext/keyword',
+    async (req, reply) => {
+      const uid = bearer(req);
+      if (!uid) return reply.code(401).send({ error: 'unauthorized' });
+      if (!(await userHasPaid(uid))) {
+        return reply.code(403).send({ error: 'payment required' });
+      }
+      const term = (req.query.term || '').trim();
+      if (!term) return reply.code(400).send({ error: 'term required' });
+      const country = (req.query.country || config.defaultCountry).toLowerCase();
+
+      if (req.query.platform === 'android') {
+        const [volume, difficulty, results] = await Promise.all([
+          gpEstimateVolume(term, country),
+          gpEstimateDifficulty(term, country),
+          gpSearch(term, country, 10),
+        ]);
+        return {
+          term, country, platform: 'android',
+          volume,
+          difficulty: { score: difficulty.score, competitors: difficulty.competitors },
+          topApps: results.slice(0, 10).map((a, i) => ({
+            position: i + 1, appId: a.appId, title: a.title, developer: a.developer, icon: a.icon,
+          })),
+        };
+      }
+
+      const [volume, difficulty, results] = await Promise.all([
+        estimateVolume(term, country),
+        estimateDifficulty(term, country),
+        searchApps(term, country, 10),
+      ]);
+      return {
+        term, country, platform: 'ios',
+        volume,
+        difficulty,
+        topApps: results.map((a, i) => ({
+          position: i + 1, appId: a.appId, title: a.title, developer: a.developer, icon: a.icon,
+        })),
+      };
+    },
+  );
 
   // --- ANALYZE: запуск + привязка к пользователю ---
 
