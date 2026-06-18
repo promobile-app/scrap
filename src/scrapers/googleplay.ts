@@ -143,6 +143,47 @@ function findAppList(node: unknown, best: unknown[] = []): unknown[] {
   return best;
 }
 
+/**
+ * Featured/«точный» результат поиска. Google Play рендерит топовое совпадение
+ * (для брендовых запросов — само приложение, напр. Roblox по "roblox") ОТДЕЛЬНЫМ
+ * hero-блоком с иной формой: appId зашит в URL details?id=, а не в app[0][0],
+ * поэтому isCard/findAppList его не видят, и в выдаче он терялся.
+ *
+ * Достаём без сетевых вызовов: первый в DFS-порядке details?id=PKG, которого нет
+ * в сетке, чей ближайший контейнер имеет строковый заголовок в [0][0]. Для
+ * небрендовых запросов hero обычно отсутствует или уже в сетке → null.
+ */
+function extractHero(data: Record<string, unknown>, gridIds: Set<string>): GpAppInfo | null {
+  let found: GpAppInfo | null = null;
+  const at = (node: unknown, parts: number[]): unknown =>
+    parts.reduce<unknown>((n, i) => (Array.isArray(n) ? n[i] : undefined), node);
+  function walk(root: unknown, node: unknown, path: number[]): void {
+    if (found) return;
+    if (typeof node === 'string') {
+      const pkg = node.match(/details\?id=([\w.]+)/)?.[1];
+      if (pkg && PKG_RE.test(pkg) && !gridIds.has(pkg)) {
+        for (let up = 1; up <= 10; up++) {
+          const a = at(root, path.slice(0, path.length - up));
+          const title = Array.isArray(a) && Array.isArray(a[0]) ? a[0][0] : undefined;
+          if (typeof title === 'string' && title.length > 0 && title.length < 80 && !title.includes('http')) {
+            found = {
+              appId: pkg, title, developer: '', score: 0, ratings: 0, installs: '',
+              minInstalls: 0, genre: '', icon: '',
+              url: 'https://play.google.com/store/apps/details?id=' + pkg,
+              free: true, description: '', summary: '',
+            };
+            return;
+          }
+        }
+      }
+      return;
+    }
+    if (Array.isArray(node)) node.forEach((c, i) => { path.push(i); walk(root, c, path); path.pop(); });
+  }
+  for (const v of Object.values(data)) { walk(v, v, []); if (found) break; }
+  return found;
+}
+
 /** Маппинг одной карточки выдачи в GpAppInfo (поля выдачи; ratings/installs — из деталей). */
 function mapCard(el: unknown): GpAppInfo | null {
   const app = (el as unknown[])[0] as unknown[];
@@ -215,6 +256,12 @@ export async function gpSearch(
       apps.push(app);
     }
   }
+
+  // Точный/featured результат (hero) Google Play рисует над сеткой — ставим первым,
+  // иначе брендовый запрос терял само приложение (Roblox по "roblox").
+  const hero = extractHero(data, seen);
+  if (hero) apps.unshift(hero);
+
   return apps.slice(0, num);
 }
 
