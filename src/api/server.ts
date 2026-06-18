@@ -433,13 +433,35 @@ async function mapLimit<T, R>(
 
 // --- Ключевое слово ---------------------------------------------------------
 
-// Сводка по ключу: volume, difficulty, топ-приложения (онлайн-расчёт).
-app.get<{ Querystring: { term: string; country?: string } }>(
+// Сводка по ключу: volume, difficulty, топ-приложения с позициями (онлайн-расчёт).
+// platform=android → Google Play, иначе App Store.
+app.get<{ Querystring: { term: string; country?: string; platform?: string } }>(
   '/keywords',
   async (req, reply) => {
     const term = req.query.term;
     if (!term) return reply.code(400).send({ error: 'term required' });
     const country = req.query.country ?? config.defaultCountry;
+
+    // --- Google Play ---
+    if (req.query.platform === 'android') {
+      const [volume, difficulty, results] = await Promise.all([
+        gpEstimateVolume(term, country),
+        gpEstimateDifficulty(term, country),
+        gpSearch(term, country, 10),
+      ]);
+      return {
+        term,
+        country,
+        platform: 'android',
+        volume,
+        difficulty: { score: difficulty.score, competitors: difficulty.competitors },
+        topApps: results.slice(0, 10).map((a, i) => ({
+          position: i + 1, appId: a.appId, title: a.title, developer: a.developer, icon: a.icon,
+        })),
+      };
+    }
+
+    // --- App Store ---
     const [volume, difficulty, results] = await Promise.all([
       estimateVolume(term, country),
       estimateDifficulty(term, country),
@@ -448,9 +470,12 @@ app.get<{ Querystring: { term: string; country?: string } }>(
     return {
       term,
       country,
+      platform: 'ios',
       volume,
       difficulty,
-      topApps: results.map((a, i) => ({ position: i + 1, appId: a.appId, title: a.title })),
+      topApps: results.map((a, i) => ({
+        position: i + 1, appId: a.appId, title: a.title, developer: a.developer, icon: a.icon,
+      })),
     };
   },
 );
