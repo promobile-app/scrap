@@ -12,7 +12,7 @@ import {
 import { generateInsights, type Goal, type InsightsResult } from '../analytics/insights.js';
 import { getDiscoveryJobLite } from '../db/repo.js';
 import { nativeSearchIds } from '../scrapers/native.js';
-import { lookupAppsCached, searchApps } from '../scrapers/appstore.js';
+import { lookupAppsCached } from '../scrapers/appstore.js';
 import { gpSearch } from '../scrapers/googleplay.js';
 import { estimateVolume } from '../analytics/appstore/volume.js';
 import { estimateDifficulty } from '../analytics/appstore/difficulty.js';
@@ -162,7 +162,7 @@ export async function registerExtensionRoutes(app: FastifyInstance): Promise<voi
   // platform=android → Google Play, иначе App Store. Гейт: нужен хотя бы один
   // оплаченный анализ (userHasPaid) — иначе 403, чтобы фича была действительно
   // платной на уровне API, а не только скрытой в UI.
-  app.get<{ Querystring: { term?: string; country?: string; platform?: string } }>(
+  app.get<{ Querystring: { term?: string; country?: string; platform?: string; appId?: string } }>(
     '/ext/keyword',
     async (req, reply) => {
       const uid = bearer(req);
@@ -173,34 +173,45 @@ export async function registerExtensionRoutes(app: FastifyInstance): Promise<voi
       const term = (req.query.term || '').trim();
       if (!term) return reply.code(400).send({ error: 'term required' });
       const country = (req.query.country || config.defaultCountry).toLowerCase();
+      // appId — приложение из открытой вкладки стора: считаем его позицию по ключу.
+      const target = (req.query.appId || '').trim();
 
       if (req.query.platform === 'android') {
         const [volume, difficulty, results] = await Promise.all([
           gpEstimateVolume(term, country),
           gpEstimateDifficulty(term, country),
-          gpSearch(term, country, 10),
+          gpSearch(term, country, 30), // шире — чтобы поймать позицию целевого приложения
         ]);
+        const idx = target ? results.findIndex((a) => a.appId === target) : -1;
         return {
           term, country, platform: 'android',
           volume,
           difficulty: { score: difficulty.score, competitors: difficulty.competitors },
+          rank: idx === -1 ? null : idx + 1,
+          totalResults: results.length,
           topApps: results.slice(0, 10).map((a, i) => ({
-            position: i + 1, appId: a.appId, title: a.title, developer: a.developer, icon: a.icon,
+            position: i + 1, appId: a.appId, title: a.title,
+            developer: a.developer, icon: a.icon, isTarget: !!target && a.appId === target,
           })),
         };
       }
 
-      const [volume, difficulty, results] = await Promise.all([
+      const [volume, difficulty, ids] = await Promise.all([
         estimateVolume(term, country),
         estimateDifficulty(term, country),
-        searchApps(term, country, 10),
+        nativeSearchIds(term, country),
       ]);
+      const idx = target ? ids.indexOf(target) : -1;
+      const top = await lookupAppsCached(ids.slice(0, 10), country);
       return {
         term, country, platform: 'ios',
         volume,
         difficulty,
-        topApps: results.map((a, i) => ({
-          position: i + 1, appId: a.appId, title: a.title, developer: a.developer, icon: a.icon,
+        rank: idx === -1 ? null : idx + 1,
+        totalResults: ids.length,
+        topApps: top.map((a, i) => ({
+          position: i + 1, appId: String(a.appId), title: a.title,
+          developer: a.developer, icon: a.icon, isTarget: !!target && String(a.appId) === target,
         })),
       };
     },

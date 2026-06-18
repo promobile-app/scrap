@@ -84,8 +84,8 @@ let pollAnalysisTimer = null;
 let pollPaymentTimer = null;
 let analysisStartedAt = 0;
 let hasPaid = false;               // аккаунт-левел право на платные фичи (keyword check)
-// Контекст проверки ключа — платформа/гео берём из открытой страницы стора.
-let kwContext = { platform: 'ios', country: 'us', detected: false };
+// Контекст проверки ключа — платформа/гео/appId берём из открытой страницы стора.
+let kwContext = { platform: 'ios', country: 'us', appId: null, detected: false };
 let kwReq = 0;                     // токен против гонки при быстром повторном поиске
 
 // --- API helper ---
@@ -421,7 +421,7 @@ const I18N = {
     errText: "Couldn't build the action plan.", retry: 'Retry',
     kw: {
       placeholder: 'Enter a keyword', check: 'Check',
-      demand: 'Demand', difficulty: 'Difficulty', top: 'Top apps',
+      demand: 'Demand', difficulty: 'Difficulty', position: 'Position', top: 'Top apps',
       checking: 'Checking…', error: "Couldn't check this keyword.",
       empty: 'No apps found.', deflt: 'default · open a store page to change',
       locked: 'Keyword check is a premium feature.<br/>Unlock any app report to enable it.',
@@ -443,7 +443,7 @@ const I18N = {
     errText: 'Не удалось построить план.', retry: 'Повторить',
     kw: {
       placeholder: 'Введите ключевое слово', check: 'Проверить',
-      demand: 'Спрос', difficulty: 'Сложность', top: 'Топ приложений',
+      demand: 'Спрос', difficulty: 'Сложность', position: 'Позиция', top: 'Топ приложений',
       checking: 'Проверяю…', error: 'Не удалось проверить ключ.',
       empty: 'Приложения не найдены.', deflt: 'по умолчанию · откройте страницу стора',
       locked: 'Проверка ключа — премиум-функция.<br/>Откройте любой оплаченный отчёт, чтобы включить.',
@@ -793,8 +793,8 @@ function openAppTab() {
 async function detectKwContext() {
   const p = parsePage(await activeTabUrl());
   kwContext = p
-    ? { platform: p.platform, country: p.country, detected: true }
-    : { platform: 'ios', country: 'us', detected: false };
+    ? { platform: p.platform, country: p.country, appId: p.appId, detected: true }
+    : { platform: 'ios', country: 'us', appId: null, detected: false };
 }
 
 async function openKeywordTab() {
@@ -830,16 +830,6 @@ function renderKwLang() {
   }
 }
 
-// Квадрант demand × difficulty для одного ключа.
-function kwQuadrant(demand, difficulty) {
-  const hiD = demand >= 50, hiF = difficulty >= 50;
-  const L = t().quad;
-  if (hiD && !hiF) return { label: L.quickWins, color: '#22c55e' };
-  if (hiD && hiF) return { label: L.pushNow, color: '#3b6ef6' };
-  if (!hiD && hiF) return { label: L.longShots, color: '#d8954a' };
-  return { label: L.ignore, color: '#5f5f66' };
-}
-
 async function checkKeyword() {
   const inp = document.getElementById('kw-input');
   const box = document.getElementById('kw-result');
@@ -851,7 +841,8 @@ async function checkKeyword() {
   try {
     const q = 'term=' + encodeURIComponent(term)
       + '&country=' + encodeURIComponent(kwContext.country)
-      + '&platform=' + kwContext.platform;
+      + '&platform=' + kwContext.platform
+      + (kwContext.appId ? '&appId=' + encodeURIComponent(kwContext.appId) : '');
     const d = await api('/ext/keyword?' + q);
     if (reqId === kwReq) renderKeyword(d);
   } catch (e) {
@@ -867,18 +858,34 @@ function renderKeyword(d) {
   const k = t().kw;
   const vol = (d.volume && d.volume.score) || 0;
   const diff = (d.difficulty && d.difficulty.score) || 0;
-  const quad = kwQuadrant(vol, diff);
-  const apps = (d.topApps || []).map((a) =>
-    `<div class="serp-item"><span class="sp-pos">${a.position}</span>`
-    + `<span class="sp-title">${escHtml(a.title)}</span></div>`).join('');
-  box.innerHTML = `
-    <div class="mgrid2">
-      <div class="mtile"><div class="mv">${vol}</div><div class="ml">${k.demand}</div></div>
-      <div class="mtile"><div class="mv">${diff}</div><div class="ml">${k.difficulty}</div></div>
-    </div>
-    <div class="kw-quad"><span class="dot" style="background:${quad.color}"></span>${quad.label}</div>
-    <div class="serp-head">${k.top}</div>
-    <div class="serp" style="border:1px solid var(--line);border-radius:12px;max-height:230px">
+  // Плитка позиции — только если открыта страница приложения (есть appId).
+  const hasTarget = !!kwContext.appId;
+  const rankVal = d.rank != null ? String(d.rank) : '—';
+  const tiles = hasTarget
+    ? `<div class="mgrid">
+        <div class="mtile"><div class="mv">${vol}</div><div class="ml">${k.demand}</div></div>
+        <div class="mtile"><div class="mv">${diff}</div><div class="ml">${k.difficulty}</div></div>
+        <div class="mtile"><div class="mv">${rankVal}</div><div class="ml">${k.position}</div></div>
+      </div>`
+    : `<div class="mgrid2">
+        <div class="mtile"><div class="mv">${vol}</div><div class="ml">${k.demand}</div></div>
+        <div class="mtile"><div class="mv">${diff}</div><div class="ml">${k.difficulty}</div></div>
+      </div>`;
+  const apps = (d.topApps || []).map((a) => {
+    const ic = a.icon
+      ? `<img class="kw-ic" src="${a.icon}" loading="lazy" onerror="this.style.visibility='hidden'" />`
+      : '<span class="kw-ic"></span>';
+    return `<div class="kw-app${a.isTarget ? ' me' : ''}">
+      <span class="kw-pos">${a.position}</span>${ic}
+      <div class="kw-meta">
+        <div class="kw-t">${escHtml(a.title)}</div>
+        <div class="kw-d">${escHtml(a.developer || '')}</div>
+      </div>
+    </div>`;
+  }).join('');
+  box.innerHTML = `${tiles}
+    <div class="serp-head" style="margin-top:12px">${k.top}</div>
+    <div class="serp" style="border:1px solid var(--line);border-radius:12px;max-height:260px">
       ${apps || `<p class="muted" style="padding:10px;text-align:center">${k.empty}</p>`}
     </div>`;
 }
