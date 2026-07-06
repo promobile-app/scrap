@@ -683,7 +683,7 @@ async function loadInsights() {
     if (reqId !== insightsReq) return; // ответ устарел — пользователь сменил goal/язык
     if (e.status === 401) { await logout(); return; }
     box.innerHTML = `<div class="ai-loading">${t().errText} `
-      + `<a class="ai-retry" style="color:#5b8bff;cursor:pointer">${t().retry}</a></div>`;
+      + `<a class="ai-retry" style="color:var(--accent-text);cursor:pointer">${t().retry}</a></div>`;
     const r = box.querySelector('.ai-retry');
     if (r) r.addEventListener('click', () => { delete insightsByGoal[key]; loadInsights(); });
   }
