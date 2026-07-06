@@ -1,5 +1,6 @@
 import { appLookup, suggest } from '../scrapers/appstore.js';
 import { nativeSearchIds } from '../scrapers/native.js';
+import { gpAppLookup, gpSearch, gpSuggest } from '../scrapers/googleplay.js';
 
 export interface DiscoveredKeyword {
   term: string;
@@ -10,7 +11,7 @@ export interface DiscoveredKeyword {
 }
 
 export interface DiscoveryResult {
-  appId: number;
+  appId: number | string; // iOS trackId (число) или Android package name (строка)
   title: string;
   country: string;
   keywords: DiscoveredKeyword[];
@@ -43,11 +44,15 @@ function demandFromSignals(autocompleteSignal: number, total: number, term: stri
   return Math.round(5 + raw * 95);
 }
 
-/** Нормализованные слова из строки. */
+/**
+ * Нормализованные слова из строки. Юникод-осознанно: кириллические и прочие
+ * не-латинские названия («Spotify: музика та подкасти») не должны схлопываться
+ * в пустоту, иначе для таких приложений нет сид-слов.
+ */
 function words(s: string): string[] {
   return s
     .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .split(/\s+/)
     .filter((w) => w.length >= 3 && !STOP_WORDS.has(w));
 }
@@ -91,12 +96,17 @@ function cacheSet(key: string, value: string[]): void {
   idsCache.set(key, { value, expires: Date.now() + CACHE_TTL_MS });
 }
 
+type SuggestFn = (term: string, country: string) => Promise<string[]>;
+
 /**
  * Генерация кандидатов ключевых слов для приложения.
  * Источники: название, жанр, autocomplete-расширения сид-слов,
  * ключи из названий приложений-соседей по выдаче.
+ * Платформо-независимо: autocomplete-источник передаётся параметром
+ * (Apple Search Hints для iOS, gplay.suggest для Android).
  */
-async function buildCandidates(
+async function buildCandidatesWith(
+  suggestFn: SuggestFn,
   title: string,
   genre: string,
   country: string,
@@ -104,7 +114,7 @@ async function buildCandidates(
   const seeds = [...new Set([...words(title), ...words(genre)])].slice(0, 6);
 
   const candidates = new Set<string>([...seeds, genre.toLowerCase()]);
-  // Сигнал спроса по термину: позиция в подсказках Apple, нормированная в [0..1].
+  // Сигнал спроса по термину: позиция в подсказках стора, нормированная в [0..1].
   const autocompleteSignals = new Map<string, number>();
 
   // Биграммы из названия (например "photo editor").
@@ -113,9 +123,9 @@ async function buildCandidates(
     candidates.add(`${titleWords[i]} ${titleWords[i + 1]}`);
   }
 
-  // Расширения через autocomplete App Store — параллельно (было последовательно).
+  // Расширения через autocomplete стора — параллельно (было последовательно).
   const hintLists = await mapLimit(seeds, 4, (seed) =>
-    suggest(seed, country).catch(() => [] as string[]),
+    suggestFn(seed, country).catch(() => [] as string[]),
   );
   for (const hints of hintLists) {
     const listLen = Math.max(hints.length, 1);
@@ -131,6 +141,23 @@ async function buildCandidates(
     candidates: [...candidates].filter((c) => c.length >= 3).slice(0, 30),
     autocompleteSignals,
   };
+}
+
+async function buildCandidates(
+  title: string,
+  genre: string,
+  country: string,
+): Promise<{ candidates: string[]; autocompleteSignals: Map<string, number> }> {
+  return buildCandidatesWith(suggest, title, genre, country);
+}
+
+/** Сортировка выдачи discovery: сначала где приложение в топе, затем по спросу. */
+function sortDiscovered(keywords: DiscoveredKeyword[]): void {
+  keywords.sort((a, b) => {
+    if ((a.rank === null) !== (b.rank === null)) return a.rank === null ? 1 : -1;
+    if (a.rank !== null && b.rank !== null && a.rank !== b.rank) return a.rank - b.rank;
+    return b.volumeScore - a.volumeScore;
+  });
 }
 
 /**
@@ -177,12 +204,55 @@ export async function discoverKeywords(
     })
   ).filter((k): k is DiscoveredKeyword => k !== null);
 
-  // Сортировка: сначала где приложение в топе, затем по спросу.
-  keywords.sort((a, b) => {
-    if ((a.rank === null) !== (b.rank === null)) return a.rank === null ? 1 : -1;
-    if (a.rank !== null && b.rank !== null && a.rank !== b.rank) return a.rank - b.rank;
-    return b.volumeScore - a.volumeScore;
-  });
+  sortDiscovered(keywords);
+
+  return { appId, title: app.title, country, keywords };
+}
+
+/**
+ * Android-вариант discovery: то же, что discoverKeywords, но на примитивах
+ * Google Play (gpAppLookup / gpSuggest / gpSearch). Особенности платформы:
+ * веб-выдача Play отдаёт только первую «страницу» (~15-30 приложений, см.
+ * gpSearch), поэтому rank=null означает «глубже выдачи», а totalResults
+ * ограничен сверху; concurrency ниже (4), чтобы не ловить капчу Google.
+ */
+export async function discoverKeywordsGp(
+  appId: string,
+  country = 'us',
+): Promise<DiscoveryResult> {
+  const app = await gpAppLookup(appId, country);
+  if (!app) throw new Error('Приложение не найдено в этом гео');
+
+  const { candidates, autocompleteSignals } = await buildCandidatesWith(
+    gpSuggest, app.title, app.genre, country,
+  );
+
+  const keywords: DiscoveredKeyword[] = (
+    await mapLimit(candidates, 4, async (term): Promise<DiscoveredKeyword | null> => {
+      const cacheKey = `gp|${country}|${term.toLowerCase()}`;
+      let ids = cacheGet(cacheKey);
+      if (!ids) {
+        try {
+          const results = await gpSearch(term, country, 250);
+          ids = results.map((a) => a.appId);
+          cacheSet(cacheKey, ids);
+        } catch {
+          return null;
+        }
+      }
+      const idx = ids.indexOf(appId);
+      const signal = autocompleteSignals.get(term.toLowerCase().trim()) ?? 0;
+      return {
+        term,
+        rank: idx === -1 ? null : idx + 1,
+        totalResults: ids.length,
+        volumeScore: demandFromSignals(signal, ids.length, term),
+        saturationScore: saturationFromResults(ids.length),
+      };
+    })
+  ).filter((k): k is DiscoveredKeyword => k !== null);
+
+  sortDiscovered(keywords);
 
   return { appId, title: app.title, country, keywords };
 }

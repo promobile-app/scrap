@@ -13,7 +13,7 @@ import { gpEstimateDifficulty } from '../analytics/googleplay/difficulty.js';
 import { topChart } from '../scrapers/charts.js';
 import { estimateVolume } from '../analytics/appstore/volume.js';
 import { estimateDifficulty } from '../analytics/appstore/difficulty.js';
-import { discoverKeywords } from '../analytics/discovery.js';
+import { discoverKeywords, discoverKeywordsGp } from '../analytics/discovery.js';
 import {
   startDiscoveryJob, getDiscoveryJobState, saturationFromResults, type UrlKeyword,
 } from '../analytics/discoverByUrl.js';
@@ -219,13 +219,15 @@ app.get('/history/all', async () => {
 });
 
 // FoxData-флоу: приложение + гео -> ключевые слова с позициями.
-app.get<{ Params: { id: string }; Querystring: { country?: string } }>(
+// platform=android -> Google Play discovery (appId = имя пакета).
+app.get<{ Params: { id: string }; Querystring: { country?: string; platform?: string } }>(
   '/apps/:id/discover',
   async (req) => {
-    return discoverKeywords(
-      Number(req.params.id),
-      req.query.country ?? config.defaultCountry,
-    );
+    const country = req.query.country ?? config.defaultCountry;
+    if (req.query.platform === 'android') {
+      return discoverKeywordsGp(req.params.id, country);
+    }
+    return discoverKeywords(Number(req.params.id), country);
   },
 );
 
