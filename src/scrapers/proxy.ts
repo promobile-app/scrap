@@ -28,12 +28,28 @@ export function proxyCount(): number { return PROXY_URLS.length; }
 const undiciAgents: ProxyAgent[] = PROXY_URLS.map((u) => new ProxyAgent(u));
 let uCursor = 0;
 
-/** Round-robin ProxyAgent для undici (или undefined → прямое соединение). */
+// Кулдаун прокси после сетевой ошибки: мёртвый прокси выбывает из ротации,
+// а не мучает каждый следующий запрос 10-секундным connect-таймаутом.
+const FAIL_COOLDOWN_MS = 5 * 60 * 1000;
+const failedUntil = new Map<Dispatcher, number>();
+
+/** Пометить прокси упавшим — он пропускается в ротации на время кулдауна. */
+export function reportDispatcherFailure(d: Dispatcher | undefined): void {
+  if (d) failedUntil.set(d, Date.now() + FAIL_COOLDOWN_MS);
+}
+
+/**
+ * Round-robin ProxyAgent для undici (или undefined → прямое соединение).
+ * Прокси в кулдауне пропускаются; если весь пул в кулдауне — идём напрямую.
+ */
 export function nextDispatcher(): Dispatcher | undefined {
   if (!undiciAgents.length) return undefined;
-  const a = undiciAgents[uCursor % undiciAgents.length]!;
-  uCursor += 1;
-  return a;
+  for (let i = 0; i < undiciAgents.length; i++) {
+    const a = undiciAgents[uCursor % undiciAgents.length]!;
+    uCursor += 1;
+    if ((failedUntil.get(a) ?? 0) <= Date.now()) return a;
+  }
+  return undefined;
 }
 
 // --- Google Play (got agent) -----------------------------------------------

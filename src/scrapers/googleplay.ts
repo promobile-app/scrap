@@ -1,7 +1,12 @@
 import gplay from 'google-play-scraper';
 import { request } from 'undici';
 import { config } from '../config.js';
-import { gpRequestOptions, nextDispatcher } from './proxy.js';
+import {
+  gpRequestOptions,
+  nextDispatcher,
+  proxyCount,
+  reportDispatcherFailure,
+} from './proxy.js';
 
 /**
  * Скрейпер Google Play. У Play Store нет официального API.
@@ -99,6 +104,34 @@ export async function gpAppLookup(
 
 const GP_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+/**
+ * HTTP-запрос к Google с ретраем по прокси-пулу. Мёртвый прокси в PROXY_URLS
+ * (connect timeout) не должен ронять запрос: пробуем до двух прокси из пула,
+ * последняя попытка — всегда прямое соединение. Без прокси — просто напрямую.
+ */
+async function gpRequest(
+  url: string,
+  opts: { method?: 'GET' | 'POST'; headers: Record<string, string>; body?: string },
+): Promise<{ statusCode: number; body: { text(): Promise<string> } }> {
+  const proxyAttempts = Math.min(proxyCount(), 2);
+  let lastErr: unknown;
+  for (let i = 0; i <= proxyAttempts; i++) {
+    const dispatcher = i < proxyAttempts ? nextDispatcher() : undefined;
+    try {
+      return await request(url, {
+        method: opts.method ?? 'GET',
+        headers: opts.headers,
+        ...(opts.body ? { body: opts.body } : {}),
+        ...(dispatcher ? { dispatcher } : {}),
+      });
+    } catch (e) {
+      reportDispatcherFailure(dispatcher);
+      lastErr = e;
+    }
+  }
+  throw lastErr;
+}
 
 /** Достаёт data-массивы из AF_initDataCallback по ключам ds:N. */
 function parseInitData(html: string): Record<string, unknown> {
@@ -230,11 +263,8 @@ export async function gpSearch(
   const url =
     `https://play.google.com/store/search?q=${encodeURIComponent(term)}` +
     `&c=apps&hl=${langOf(country)}&gl=${country}`;
-  const dispatcher = nextDispatcher();
-  const res = await request(url, {
-    method: 'GET',
+  const res = await gpRequest(url, {
     headers: { 'User-Agent': GP_UA, 'Accept-Language': `${langOf(country)};q=0.9` },
-    ...(dispatcher ? { dispatcher } : {}),
   });
   if (res.statusCode >= 400) {
     throw new Error(`gpSearch HTTP ${res.statusCode} для "${term}"`);
@@ -276,8 +306,12 @@ export async function gpGetRank(
   return { rank: idx === -1 ? null : idx + 1, total: results.length };
 }
 
-/** Autocomplete-подсказки Google Play. */
-export async function gpSuggest(
+/**
+ * Autocomplete-подсказки через google-play-scraper. СЛОМАН: библиотека
+ * молча возвращает пусто (устаревший формат batchexecute) — заменён
+ * собственной реализацией gpSuggest ниже. Оставлен для истории.
+ */
+export async function gpSuggest_old(
   term: string,
   country = config.defaultCountry,
 ): Promise<string[]> {
@@ -285,6 +319,50 @@ export async function gpSuggest(
     return await gplay.suggest({
       term, country, lang: langOf(country), requestOptions: gpRequestOptions(),
     } as Parameters<typeof gplay.suggest>[0]);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Autocomplete-подсказки Google Play — свой вызов batchexecute RPC IJ4APc
+ * (тот же, что делает витрина Play в браузере). Формат ответа: анти-JSON
+ * префикс )]}' + JSON, где payload[0][2] — вложенная JSON-строка, в ней
+ * data[0][0] — список подсказок, item[0] — сам термин.
+ */
+export async function gpSuggest(
+  term: string,
+  country = config.defaultCountry,
+): Promise<string[]> {
+  const url =
+    'https://play.google.com/_/PlayStoreUi/data/batchexecute' +
+    `?rpcids=IJ4APc&hl=${langOf(country)}&gl=${country}`;
+  const fReq = JSON.stringify([[[
+    'IJ4APc',
+    JSON.stringify([[null, [term], [10], [2], 4]]),
+    null,
+    'generic',
+  ]]]);
+  try {
+    const res = await gpRequest(url, {
+      method: 'POST',
+      headers: {
+        'User-Agent': GP_UA,
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+      },
+      body: 'f.req=' + encodeURIComponent(fReq),
+    });
+    if (res.statusCode >= 400) return [];
+    const text = await res.body.text();
+    const payload = JSON.parse(text.replace(/^\)\]\}'/, '').trim()) as unknown[];
+    const inner = Array.isArray(payload?.[0]) ? (payload[0] as unknown[])[2] : undefined;
+    if (typeof inner !== 'string') return [];
+    const data = JSON.parse(inner) as unknown[];
+    const items = Array.isArray(data?.[0]) ? (data[0] as unknown[])[0] : undefined;
+    if (!Array.isArray(items)) return [];
+    return items
+      .map((it: unknown) => (Array.isArray(it) && typeof it[0] === 'string' ? it[0] : null))
+      .filter((s): s is string => !!s);
   } catch {
     return [];
   }
