@@ -154,6 +154,22 @@ CREATE TABLE IF NOT EXISTS users (
 ALTER TABLE discovery_jobs ADD COLUMN IF NOT EXISTS user_id BIGINT REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE discovery_jobs ADD COLUMN IF NOT EXISTS paid BOOLEAN NOT NULL DEFAULT FALSE;
 
+-- Подписки (основная модель монетизации).
+-- У пользователя максимум одна строка: продление двигает current_period_end.
+CREATE TABLE IF NOT EXISTS subscriptions (
+  id                 BIGSERIAL PRIMARY KEY,
+  user_id            BIGINT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  plan               TEXT NOT NULL DEFAULT 'pro',
+  status             TEXT NOT NULL DEFAULT 'pending', -- pending|active|canceled|expired
+  provider           TEXT NOT NULL DEFAULT 'stub',
+  external_id        TEXT,                             -- id подписки у провайдера (Paddle и т.п.)
+  current_period_end TIMESTAMPTZ,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_active
+  ON subscriptions (user_id, status, current_period_end);
+
 -- Платежи (stub-провайдер; провайдер заменим позже).
 CREATE TABLE IF NOT EXISTS payments (
   id          BIGSERIAL PRIMARY KEY,
@@ -169,6 +185,28 @@ CREATE TABLE IF NOT EXISTS payments (
 );
 CREATE INDEX IF NOT EXISTS idx_payments_user ON payments (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_payments_job ON payments (job_id);
+
+-- Миграция под подписки: платёж теперь может быть подписочным (без job).
+ALTER TABLE payments ALTER COLUMN job_id DROP NOT NULL;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'report'; -- report|subscription
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS subscription_id BIGINT REFERENCES subscriptions(id) ON DELETE SET NULL;
+
+-- Отслеживаемые приложения (retention-фича подписки): пользователь «подписан»
+-- на приложение, scheduler переснимает его ключи, дайджест шлёт изменения.
+CREATE TABLE IF NOT EXISTS tracked_apps (
+  id             BIGSERIAL PRIMARY KEY,
+  user_id        BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  platform       TEXT NOT NULL,             -- ios / android
+  app_id         TEXT NOT NULL,
+  app_title      TEXT,
+  country        TEXT NOT NULL,
+  terms          JSONB NOT NULL DEFAULT '[]', -- мониторимые ключи (топ по volume)
+  alerts_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  last_digest_at TIMESTAMPTZ,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, platform, app_id, country)
+);
+CREATE INDEX IF NOT EXISTS idx_tracked_apps_user ON tracked_apps (user_id);
 
 -- Аналитика событий extension.
 CREATE TABLE IF NOT EXISTS analytics_events (

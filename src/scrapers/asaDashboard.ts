@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { request } from 'undici';
 import { config } from '../config.js';
 
@@ -35,15 +35,22 @@ interface DashSession {
   orgId?: number;
 }
 
+// Кэш сессии инвалидируется по mtime файла: обновление .asa-session.json
+// подхватывается БЕЗ рестарта сервиса (раньше кэш жил вечно и свежие куки
+// начинали работать только после redeploy).
 let sessionCache: DashSession | null = null;
+let sessionMtimeMs = 0;
+
 function loadSession(): DashSession {
-  if (sessionCache) return sessionCache;
+  const mtime = statSync(config.asaDash.sessionPath).mtimeMs;
+  if (sessionCache && mtime === sessionMtimeMs) return sessionCache;
   const raw = readFileSync(config.asaDash.sessionPath, 'utf8');
   const s = JSON.parse(raw) as DashSession;
   if (!s.cookie || !s.xsrf) {
     throw new Error(`${config.asaDash.sessionPath}: нужны поля cookie и xsrf`);
   }
   sessionCache = s;
+  sessionMtimeMs = mtime;
   return s;
 }
 

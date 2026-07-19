@@ -18,6 +18,14 @@ import { estimateVolume } from '../analytics/appstore/volume.js';
 import { estimateDifficulty } from '../analytics/appstore/difficulty.js';
 import { gpEstimateVolume } from '../analytics/googleplay/volume.js';
 import { gpEstimateDifficulty } from '../analytics/googleplay/difficulty.js';
+import {
+  paymentProvider, confirmStubPayment, verifyConfirmToken, getSubscription,
+} from '../payments/provider.js';
+import {
+  trackApp, untrackApp, listTrackedApps, getTrackedApp, findTracked,
+  computeChanges, rankSeries, disableAlerts,
+} from '../tracking/tracking.js';
+import { verifyUnsubToken } from '../jobs/digest.js';
 
 const TOKEN_TTL = '30d';
 
@@ -78,15 +86,30 @@ async function jobPaid(jobId: number, userId: number): Promise<boolean> {
   return row.paid && row.user_id === userId;
 }
 
-// Аккаунт-левел право на платные фичи (например, проверку ключа): есть ли у
-// пользователя хотя бы один оплаченный анализ. Премиум-подписки нет — оплата
-// привязана к job, поэтому «платил хоть раз» = доступ к keyword-проверке.
-async function userHasPaid(userId: number): Promise<boolean> {
+// Аккаунт-левел доступ к платным фичам. Основная модель — подписка; для
+// пользователей, купивших разовые отчёты до перехода на подписку, доступ
+// сохраняется (legacy: есть хотя бы одна оплаченная job).
+async function userHasAccess(userId: number): Promise<boolean> {
+  const sub = await getSubscription(userId);
+  if (sub?.active) return true;
   const rows = await query<{ exists: boolean }>(
     'SELECT EXISTS(SELECT 1 FROM discovery_jobs WHERE user_id = $1 AND paid = TRUE) AS exists',
     [userId],
   );
   return rows[0]?.exists === true;
+}
+
+// Право видеть содержимое конкретной job: активная подписка открывает все
+// свои job'ы; отдельно оплаченная job (legacy) — только её.
+async function jobUnlocked(jobId: number, userId: number): Promise<boolean> {
+  if (await jobPaid(jobId, userId)) return true;
+  const sub = await getSubscription(userId);
+  if (!sub?.active) return false;
+  // Подписка открывает только job'ы самого пользователя.
+  const rows = await query<{ user_id: number | null }>(
+    'SELECT user_id FROM discovery_jobs WHERE id = $1', [jobId],
+  );
+  return rows[0]?.user_id === userId;
 }
 
 function summarize(keywords: { rank: number | null }[]): {
@@ -105,8 +128,14 @@ function summarize(keywords: { rank: number | null }[]): {
 export async function registerExtensionRoutes(app: FastifyInstance): Promise<void> {
   // --- AUTH ---
 
+  // Анти-брутфорс: auth-маршруты лимитируются жёстче общего лимита (по IP).
+  const authRateLimit = {
+    rateLimit: { max: 15, timeWindow: '5 minutes' as const },
+  };
+
   app.post<{ Body: { email?: string; password?: string } }>(
     '/auth/register',
+    { config: authRateLimit },
     async (req, reply) => {
       const email = (req.body.email || '').trim().toLowerCase();
       const password = req.body.password || '';
@@ -132,6 +161,7 @@ export async function registerExtensionRoutes(app: FastifyInstance): Promise<voi
 
   app.post<{ Body: { email?: string; password?: string } }>(
     '/auth/login',
+    { config: authRateLimit },
     async (req, reply) => {
       const email = (req.body.email || '').trim().toLowerCase();
       const password = req.body.password || '';
@@ -153,8 +183,12 @@ export async function registerExtensionRoutes(app: FastifyInstance): Promise<voi
       'SELECT id, email FROM users WHERE id = $1', [uid],
     );
     if (!rows[0]) return reply.code(401).send({ error: 'unauthorized' });
-    const hasPaid = await userHasPaid(uid);
-    return { user: rows[0], hasPaid };
+    const [hasAccess, subscription] = await Promise.all([
+      userHasAccess(uid),
+      getSubscription(uid),
+    ]);
+    // hasPaid — имя оставлено для совместимости со старыми версиями расширения.
+    return { user: rows[0], hasPaid: hasAccess, hasAccess, subscription };
   });
 
   // --- KEYWORD CHECK (платная фича) -----------------------------------------
@@ -167,7 +201,7 @@ export async function registerExtensionRoutes(app: FastifyInstance): Promise<voi
     async (req, reply) => {
       const uid = bearer(req);
       if (!uid) return reply.code(401).send({ error: 'unauthorized' });
-      if (!(await userHasPaid(uid))) {
+      if (!(await userHasAccess(uid))) {
         return reply.code(403).send({ error: 'payment required' });
       }
       const term = (req.query.term || '').trim();
@@ -239,8 +273,9 @@ export async function registerExtensionRoutes(app: FastifyInstance): Promise<voi
         [uid, state.jobId],
       );
       const summary = summarize(state.keywords);
-      const paid = await jobPaid(state.jobId, uid);
-      return { ...state, summary, paid };
+      const paid = await jobUnlocked(state.jobId, uid);
+      // Подписчику ключи отдаём сразу — без второго запроса /ext/job.
+      return { ...state, keywords: paid ? state.keywords : [], summary, paid };
     },
   );
 
@@ -253,60 +288,66 @@ export async function registerExtensionRoutes(app: FastifyInstance): Promise<voi
       const state = await getDiscoveryJobState(jobId);
       if (!state) return reply.code(404).send({ error: 'job not found' });
       const summary = summarize(state.keywords);
-      const paid = await jobPaid(jobId, uid);
+      // «Оплачено» = подписка активна (или job куплена разово до перехода).
+      const paid = await jobUnlocked(jobId, uid);
       // Прячем полный список ключей до оплаты — отдаём только summary.
       const keywords = paid ? state.keywords : [];
       return { ...state, keywords, summary, paid };
     },
   );
 
-  // --- PAYMENTS (stub-провайдер; заменим на Stripe позже) ---
+  // --- PAYMENTS ---
+  // Модель: подписка (config.subscription). Слой провайдера — payments/provider.ts;
+  // сейчас stub, замена на Paddle/Stripe не трогает эти маршруты и расширение.
 
   app.post<{ Body: { jobId?: number } }>(
     '/payment/checkout',
     async (req, reply) => {
       const uid = bearer(req);
       if (!uid) return reply.code(401).send({ error: 'unauthorized' });
-      const jobId = Number(req.body.jobId);
-      if (!jobId) return reply.code(400).send({ error: 'jobId required' });
-      const owners = await query<{ user_id: number | null }>(
-        'SELECT user_id FROM discovery_jobs WHERE id = $1', [jobId],
-      );
-      if (!owners[0]) return reply.code(404).send({ error: 'job not found' });
-      if (owners[0].user_id !== uid) {
-        return reply.code(403).send({ error: 'not your job' });
+      // jobId опционален: это job, с пейволла которой пришли (для истории).
+      const jobId = req.body.jobId ? Number(req.body.jobId) : null;
+      if (jobId) {
+        const owners = await query<{ user_id: number | null }>(
+          'SELECT user_id FROM discovery_jobs WHERE id = $1', [jobId],
+        );
+        if (!owners[0]) return reply.code(404).send({ error: 'job not found' });
+        if (owners[0].user_id !== uid) {
+          return reply.code(403).send({ error: 'not your job' });
+        }
       }
-      const rows = await query<{ id: number }>(
-        `INSERT INTO payments (user_id, job_id, amount_cents, currency, status, provider)
-         VALUES ($1, $2, $3, $4, 'pending', 'stub') RETURNING id`,
-        [uid, jobId, config.reportPriceCents, config.reportCurrency],
-      );
-      const paymentId = rows[0]!.id;
-      // Stub-checkout: на этом же бэке отрисуем простую страницу с кнопкой
-      // «Pay», которая дёрнет /payment/confirm. Возвращаем URL для extension.
-      const checkoutUrl = `/payment/checkout/${paymentId}`;
+      const session = await paymentProvider.createSubscriptionCheckout(uid, jobId);
       return {
-        paymentId,
-        checkoutUrl,
-        amountCents: config.reportPriceCents,
-        currency: config.reportCurrency,
+        paymentId: session.paymentId,
+        checkoutUrl: session.checkoutUrl,
+        amountCents: session.amountCents,
+        currency: session.currency,
+        kind: session.kind,
+        periodDays: config.subscription.periodDays,
       };
     },
   );
 
-  // Simple HTML-страничка stub-checkout — открывается в новой вкладке.
-  app.get<{ Params: { id: string } }>(
+  // HTML-страничка stub-checkout — открывается в новой вкладке.
+  // Требует confirm-токен (?t=...): без него страница не работает, а чужой
+  // платёж подтвердить нельзя.
+  app.get<{ Params: { id: string }; Querystring: { t?: string } }>(
     '/payment/checkout/:id',
     async (req, reply) => {
       const paymentId = Number(req.params.id);
-      const rows = await query<{ amount_cents: number; currency: string; status: string }>(
-        'SELECT amount_cents, currency, status FROM payments WHERE id = $1',
+      const token = req.query.t || '';
+      if (verifyConfirmToken(token) !== paymentId) {
+        return reply.code(403).send('invalid or expired checkout link');
+      }
+      const rows = await query<{ amount_cents: number; currency: string; status: string; kind: string }>(
+        'SELECT amount_cents, currency, status, kind FROM payments WHERE id = $1',
         [paymentId],
       );
       const p = rows[0];
       if (!p) return reply.code(404).send('payment not found');
       reply.header('Content-Type', 'text/html; charset=utf-8');
       const amount = (p.amount_cents / 100).toFixed(2);
+      const period = config.subscription.periodDays;
       return `<!doctype html><html><head><meta charset="utf-8"><title>Checkout</title>
         <style>body{font-family:-apple-system,sans-serif;background:#0c0c0f;color:#f1f1f3;
         display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
@@ -317,9 +358,9 @@ export async function registerExtensionRoutes(app: FastifyInstance): Promise<voi
         background:#3b6ef6;color:#fff;font-weight:700;font-size:14px;cursor:pointer;width:100%}
         button:hover{background:#345fdb}button.fail{background:#3a3a40;margin-top:8px}
         </style></head><body><div class="card">
-        <h1>RankRadar — full report</h1>
-        <p class="muted">Unlock full keyword list and Excel download</p>
-        <p style="font-size:28px;font-weight:800;margin:18px 0">${amount} ${p.currency}</p>
+        <h1>RankRadar Pro</h1>
+        <p class="muted">All reports, keyword checks and Excel export for every app</p>
+        <p style="font-size:28px;font-weight:800;margin:18px 0">${amount} ${p.currency}<span style="font-size:14px;color:#87878f"> / ${period} days</span></p>
         <p class="muted">Status: ${p.status}</p>
         <button onclick="pay('success')">Pay (stub success)</button>
         <button class="fail" onclick="pay('failed')">Simulate failure</button>
@@ -327,7 +368,7 @@ export async function registerExtensionRoutes(app: FastifyInstance): Promise<voi
           async function pay(outcome){
             const r = await fetch('/payment/confirm', {method:'POST',
               headers:{'Content-Type':'application/json'},
-              body: JSON.stringify({paymentId:${paymentId}, outcome})});
+              body: JSON.stringify({paymentId:${paymentId}, outcome, token:${JSON.stringify(token)}})});
             const d = await r.json();
             document.querySelector('.card').innerHTML =
               '<h1>'+(d.status==='success'?'Payment successful':'Payment failed')+'</h1>'+
@@ -337,27 +378,18 @@ export async function registerExtensionRoutes(app: FastifyInstance): Promise<voi
     },
   );
 
-  app.post<{ Body: { paymentId?: number; outcome?: 'success' | 'failed' } }>(
+  app.post<{ Body: { paymentId?: number; outcome?: 'success' | 'failed'; token?: string } }>(
     '/payment/confirm',
     async (req, reply) => {
       const paymentId = Number(req.body.paymentId);
-      const outcome = req.body.outcome === 'failed' ? 'failed' : 'success';
-      const rows = await query<{ user_id: number; job_id: number; status: string }>(
-        'SELECT user_id, job_id, status FROM payments WHERE id = $1', [paymentId],
-      );
-      const p = rows[0];
-      if (!p) return reply.code(404).send({ error: 'payment not found' });
-      if (p.status !== 'pending') return { status: p.status };
-      await query(
-        `UPDATE payments SET status = $1, updated_at = now() WHERE id = $2`,
-        [outcome, paymentId],
-      );
-      if (outcome === 'success') {
-        await query(
-          'UPDATE discovery_jobs SET paid = TRUE WHERE id = $1', [p.job_id],
-        );
+      // Подтвердить платёж может только держатель confirm-токена этого платежа.
+      if (verifyConfirmToken(req.body.token || '') !== paymentId) {
+        return reply.code(403).send({ error: 'invalid confirm token' });
       }
-      return { status: outcome };
+      const outcome = req.body.outcome === 'failed' ? 'failed' : 'success';
+      const result = await confirmStubPayment(paymentId, outcome);
+      if (!result) return reply.code(404).send({ error: 'payment not found' });
+      return result;
     },
   );
 
@@ -387,7 +419,7 @@ export async function registerExtensionRoutes(app: FastifyInstance): Promise<voi
       const jobId = Number(req.params.id);
       const state = await getDiscoveryJobState(jobId);
       if (!state) return reply.code(404).send({ error: 'job not found' });
-      if (!(await jobPaid(jobId, uid))) {
+      if (!(await jobUnlocked(jobId, uid))) {
         return reply.code(403).send({ error: 'payment required' });
       }
       const ranked = state.keywords.filter((k) => k.rank != null);
@@ -435,7 +467,7 @@ export async function registerExtensionRoutes(app: FastifyInstance): Promise<voi
       if (!uid) return reply.code(401).send({ error: 'unauthorized' });
       const jobId = Number(req.body.jobId);
       if (!jobId) return reply.code(400).send({ error: 'jobId required' });
-      if (!(await jobPaid(jobId, uid))) {
+      if (!(await jobUnlocked(jobId, uid))) {
         return reply.code(403).send({ error: 'payment required' });
       }
       const goal: Goal = VALID_GOALS.includes(req.body.goal as Goal)
@@ -516,6 +548,143 @@ export async function registerExtensionRoutes(app: FastifyInstance): Promise<voi
     },
   );
 
+  // --- TRACKING (retention-ядро подписки, Pro-gated) ---
+
+  // Начать отслеживать приложение (ключи — из последнего готового анализа).
+  app.post<{ Body: { platform?: string; appId?: string; country?: string } }>(
+    '/ext/track',
+    async (req, reply) => {
+      const uid = bearer(req);
+      if (!uid) return reply.code(401).send({ error: 'unauthorized' });
+      if (!(await userHasAccess(uid))) {
+        return reply.code(403).send({ error: 'payment required' });
+      }
+      const platform = req.body.platform === 'android' ? 'android' : 'ios';
+      const appId = (req.body.appId || '').trim();
+      const country = (req.body.country || config.defaultCountry).toLowerCase();
+      if (!appId) return reply.code(400).send({ error: 'appId required' });
+      try {
+        const tracked = await trackApp(uid, platform, appId, country);
+        return { tracked: { id: tracked.id, terms: tracked.terms.length } };
+      } catch (e) {
+        return reply.code(400).send({ error: e instanceof Error ? e.message : 'error' });
+      }
+    },
+  );
+
+  app.delete<{ Params: { id: string } }>(
+    '/ext/track/:id',
+    async (req, reply) => {
+      const uid = bearer(req);
+      if (!uid) return reply.code(401).send({ error: 'unauthorized' });
+      const ok = await untrackApp(uid, Number(req.params.id));
+      if (!ok) return reply.code(404).send({ error: 'not found' });
+      return { ok: true };
+    },
+  );
+
+  // Список отслеживаемых приложений + сводка движений за 24ч (для вкладки).
+  app.get('/ext/tracked', async (req, reply) => {
+    const uid = bearer(req);
+    if (!uid) return reply.code(401).send({ error: 'unauthorized' });
+    if (!(await userHasAccess(uid))) {
+      return reply.code(403).send({ error: 'payment required' });
+    }
+    const apps = await listTrackedApps(uid);
+    const items = await Promise.all(apps.map(async (a) => {
+      const changes = await computeChanges(a.platform, a.appId, a.country, a.terms, 24);
+      const sig = changes.filter((c) => c.significant);
+      return {
+        id: a.id,
+        platform: a.platform,
+        appId: a.appId,
+        appTitle: a.appTitle,
+        country: a.country,
+        terms: a.terms.length,
+        alertsEnabled: a.alertsEnabled,
+        up: sig.filter((c) => (c.delta ?? 0) > 0 || c.enteredTop10).length,
+        down: sig.filter((c) => (c.delta ?? 0) < 0 || c.leftTop10).length,
+      };
+    }));
+    return { items };
+  });
+
+  // Детали одного отслеживаемого приложения: изменения + серии для спарклайнов.
+  app.get<{ Params: { id: string } }>(
+    '/ext/tracked/:id',
+    async (req, reply) => {
+      const uid = bearer(req);
+      if (!uid) return reply.code(401).send({ error: 'unauthorized' });
+      if (!(await userHasAccess(uid))) {
+        return reply.code(403).send({ error: 'payment required' });
+      }
+      const a = await getTrackedApp(uid, Number(req.params.id));
+      if (!a) return reply.code(404).send({ error: 'not found' });
+      const [changes, series] = await Promise.all([
+        computeChanges(a.platform, a.appId, a.country, a.terms, 24),
+        rankSeries(a.platform, a.appId, a.country, a.terms, 20),
+      ]);
+      // Сортировка: значимые сверху (по |delta|), затем по текущей позиции.
+      const byTerm = new Map(changes.map((c) => [c.term, c]));
+      const keywords = a.terms.map((term) => {
+        const c = byTerm.get(term);
+        return {
+          term,
+          currRank: c?.currRank ?? null,
+          prevRank: c?.prevRank ?? null,
+          delta: c?.delta ?? null,
+          enteredTop10: c?.enteredTop10 ?? false,
+          leftTop10: c?.leftTop10 ?? false,
+          significant: c?.significant ?? false,
+          series: (series[term] ?? []).map((p) => p.rank),
+        };
+      }).sort((x, y) => {
+        if (x.significant !== y.significant) return x.significant ? -1 : 1;
+        const dx = Math.abs(x.delta ?? 0), dy = Math.abs(y.delta ?? 0);
+        if (dx !== dy) return dy - dx;
+        return (x.currRank ?? 999) - (y.currRank ?? 999);
+      });
+      return {
+        id: a.id,
+        platform: a.platform,
+        appId: a.appId,
+        appTitle: a.appTitle,
+        country: a.country,
+        alertsEnabled: a.alertsEnabled,
+        keywords,
+      };
+    },
+  );
+
+  // Отслеживается ли приложение (для кнопки Track в отчёте).
+  app.get<{ Querystring: { platform?: string; appId?: string; country?: string } }>(
+    '/ext/track/status',
+    async (req, reply) => {
+      const uid = bearer(req);
+      if (!uid) return reply.code(401).send({ error: 'unauthorized' });
+      const platform = req.query.platform === 'android' ? 'android' : 'ios';
+      const appId = (req.query.appId || '').trim();
+      const country = (req.query.country || config.defaultCountry).toLowerCase();
+      if (!appId) return reply.code(400).send({ error: 'appId required' });
+      const t = await findTracked(uid, platform, appId, country);
+      return { tracked: t ? { id: t.id, terms: t.terms.length } : null };
+    },
+  );
+
+  // Unsubscribe из письма (подписанный токен, без логина).
+  app.get<{ Querystring: { t?: string } }>(
+    '/ext/alerts/unsubscribe',
+    async (req, reply) => {
+      const uid = verifyUnsubToken(req.query.t || '');
+      if (!uid) return reply.code(403).send('invalid or expired link');
+      await disableAlerts(uid);
+      reply.header('Content-Type', 'text/html; charset=utf-8');
+      return `<!doctype html><meta charset="utf-8"><body style="font-family:-apple-system,sans-serif;text-align:center;padding:60px">
+        <h2>Email alerts turned off</h2>
+        <p style="color:#888">You can re-enable them by tracking any app again in the RankRadar extension.</p></body>`;
+    },
+  );
+
   // --- ANALYTICS ---
 
   app.post<{ Body: { event?: string; payload?: Record<string, unknown> } }>(
@@ -532,6 +701,8 @@ export async function registerExtensionRoutes(app: FastifyInstance): Promise<voi
         'payment_failed',
         'report_downloaded',
         'insights_viewed',
+        'keyword_checked',
+        'app_tracked',
       ]);
       if (!allowed.has(event)) return reply.code(400).send({ error: 'unknown event' });
       await query(
