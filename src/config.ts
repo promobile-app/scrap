@@ -1,6 +1,16 @@
 import 'dotenv/config';
 
+// Прод-окружение: Railway выставляет RAILWAY_ENVIRONMENT_NAME, иначе NODE_ENV.
+const isProduction =
+  process.env.NODE_ENV === 'production' || Boolean(process.env.RAILWAY_ENVIRONMENT_NAME);
+
+// В проде дефолтный JWT-секрет недопустим: любой сможет подделать токены.
+if (isProduction && !process.env.JWT_SECRET) {
+  throw new Error('JWT_SECRET обязателен в production — задай env-переменную.');
+}
+
 export const config = {
+  isProduction,
   databaseUrl: process.env.DATABASE_URL ?? 'postgres://aso:aso@localhost:5432/aso',
   port: Number(process.env.PORT ?? 3000),
   defaultCountry: process.env.DEFAULT_COUNTRY ?? 'us',
@@ -9,6 +19,36 @@ export const config = {
   jwtSecret: process.env.JWT_SECRET ?? 'dev-insecure-change-me',
   reportPriceCents: Number(process.env.REPORT_PRICE_CENTS ?? 499),
   reportCurrency: process.env.REPORT_CURRENCY ?? 'USD',
+  // Подписка — основная модель монетизации (расширение).
+  subscription: {
+    priceCents: Number(process.env.SUBSCRIPTION_PRICE_CENTS ?? 999),
+    currency: process.env.SUBSCRIPTION_CURRENCY ?? 'USD',
+    periodDays: Number(process.env.SUBSCRIPTION_PERIOD_DAYS ?? 30),
+  },
+  // Алерты (протухла ASA-сессия, оплаты, критические ошибки) — в Telegram.
+  // Оба поля пустые => алерты выключены, всё пишется только в лог.
+  telegram: {
+    botToken: process.env.TELEGRAM_BOT_TOKEN ?? '',
+    chatId: process.env.TELEGRAM_CHAT_ID ?? '',
+  },
+  // Трекинг позиций + email-дайджест (retention-фича подписки).
+  tracking: {
+    // Сколько топ-ключей приложения мониторим (по volume) — ограничивает
+    // нагрузку recheck: 30 ключей × N приложений каждые 3 часа.
+    termsLimit: Number(process.env.TRACKING_TERMS_LIMIT ?? 30),
+    // Порог значимого движения позиции для дайджеста.
+    rankDelta: Number(process.env.TRACKING_RANK_DELTA ?? 3),
+    // Не чаще одного дайджеста в N часов на пользователя.
+    digestMinHours: Number(process.env.DIGEST_MIN_HOURS ?? 20),
+  },
+  // Email (дайджесты): Resend HTTP API. Пустой ключ => email выключен,
+  // дайджест просто пишется в лог (для локальной разработки).
+  email: {
+    resendApiKey: process.env.RESEND_API_KEY ?? '',
+    from: process.env.EMAIL_FROM ?? 'RankRadar <alerts@rankradar.app>',
+  },
+  // Базовый публичный URL сервиса — для ссылок в письмах (unsubscribe).
+  publicUrl: process.env.PUBLIC_URL ?? 'https://scrap-production-c0db.up.railway.app',
   asa: {
     clientId: process.env.ASA_CLIENT_ID ?? '',
     teamId: process.env.ASA_TEAM_ID ?? '',

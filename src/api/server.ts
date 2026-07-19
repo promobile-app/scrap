@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
 import fastifyCors from '@fastify/cors';
+import fastifyRateLimit from '@fastify/rate-limit';
 import { config } from '../config.js';
 import { query } from '../db/pool.js';
 import { appLookup, searchApps, getRank, lookupApps } from '../scrapers/appstore.js';
@@ -11,7 +12,7 @@ import { gpSearch, gpAppLookup, gpTopChart } from '../scrapers/googleplay.js';
 import { gpEstimateVolume } from '../analytics/googleplay/volume.js';
 import { gpEstimateDifficulty } from '../analytics/googleplay/difficulty.js';
 import { topChart } from '../scrapers/charts.js';
-import { estimateVolume } from '../analytics/appstore/volume.js';
+import { estimateVolume, getAsaSourceStatus } from '../analytics/appstore/volume.js';
 import { estimateDifficulty } from '../analytics/appstore/difficulty.js';
 import { discoverKeywords, discoverKeywordsGp } from '../analytics/discovery.js';
 import {
@@ -48,6 +49,21 @@ const app = Fastify({ logger: true });
 
 // CORS: дашборд может открываться с другого origin (панель предпросмотра).
 await app.register(fastifyCors, { origin: true });
+
+// Rate limiting: API публичный на Railway — без лимитов один клиент может
+// выесть скрейп-бюджет (и подставить IP под бан Apple). Ключ — по
+// пользователю (Bearer), для анонимов — по IP. Отдельные, более жёсткие
+// лимиты на auth-маршрутах — от брутфорса паролей (см. extensionRoutes).
+await app.register(fastifyRateLimit, {
+  global: true,
+  max: 240,                    // 240 запросов/мин достаточно для UI + поллинга
+  timeWindow: '1 minute',
+  keyGenerator: (req) => {
+    const auth = req.headers.authorization;
+    return auth && auth.startsWith('Bearer ') ? auth.slice(7, 47) : req.ip;
+  },
+  allowList: (req) => req.url === '/health',
+});
 
 // Статика дашборда (public/ в корне проекта).
 const projectRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -573,6 +589,21 @@ app.get<{ Querystring: { country?: string } }>('/languages', async (req) => {
 });
 
 app.get('/health', async () => ({ ok: true }));
+
+// Мониторинг источника volume: если healthy=false при dashboardConfigured=true —
+// сессия ASA протухла, volume отдаётся эвристикой (обнови .asa-session.json).
+app.get('/health/asa', async () => getAsaSourceStatus());
+
+// Живая проба Apple-скрейпинга: если ok:false при работающем Google Play —
+// egress-IP забанен Apple (лечится PROXY_URLS или сменой IP/redeploy).
+app.get('/health/apple', async () => {
+  try {
+    const ids = await nativeSearchIds('test', 'us');
+    return { ok: ids.length > 0, results: ids.length };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
 
 await registerExtensionRoutes(app);
 

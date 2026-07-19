@@ -5,13 +5,24 @@ import { gpSearch } from '../scrapers/googleplay.js';
 import { gpEstimateVolume } from '../analytics/googleplay/volume.js';
 import { gpEstimateDifficulty } from '../analytics/googleplay/difficulty.js';
 import { distinctMetricTargets, saveMetricCheck } from '../db/repo.js';
+import { trackedRecheckTargets } from '../tracking/tracking.js';
 
 /**
  * Переснимает все связки «приложение + ключ», которые уже проверялись,
  * и сохраняет новый замер в историю — для накопления графиков.
+ * Отслеживаемые приложения (tracked_apps) добавляются в цели явно: их история
+ * должна копиться, даже если по ним давно не было ручных проверок.
  */
 export async function recheckAll(): Promise<number> {
-  const targets = await distinctMetricTargets();
+  const [historic, tracked] = await Promise.all([
+    distinctMetricTargets(),
+    trackedRecheckTargets(),
+  ]);
+  const seen = new Set(historic.map((t) => `${t.platform}|${t.appId}|${t.term}|${t.country}`));
+  const targets = [
+    ...historic,
+    ...tracked.filter((t) => !seen.has(`${t.platform}|${t.appId}|${t.term}|${t.country}`)),
+  ];
   console.log(`[recheck] старт: ${targets.length} связок`, new Date().toISOString());
   let saved = 0;
 

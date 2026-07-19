@@ -2,6 +2,7 @@ import { suggest } from '../../scrapers/appstore.js';
 import { nativeSearchIds } from '../../scrapers/native.js';
 import { isAsaDashConfigured, keywordPopularity } from '../../scrapers/asaDashboard.js';
 import { config } from '../../config.js';
+import { notify } from '../../notify.js';
 import { getWeights, weightedScore } from '../weights.js';
 import { prefixInformativeness } from '../signals.js';
 
@@ -112,6 +113,32 @@ export async function estimateVolume(
  * Когда появится приложение — достаточно заполнить ASA_DASH_ADAM_ID, и эта
  * функция автоматически начнёт отдавать source: 'apple_search_ads'.
  */
+// Статус источника volume — для /health/asa и мониторинга: когда ASA
+// последний раз отвечал и когда последний раз падал в эвристику.
+const asaStatus = {
+  lastSuccessAt: 0,
+  lastFailureAt: 0,
+  lastError: '' as string,
+};
+
+export function getAsaSourceStatus(): {
+  dashboardConfigured: boolean;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  lastError: string | null;
+  healthy: boolean;
+} {
+  const configured = isAsaDashConfigured();
+  return {
+    dashboardConfigured: configured,
+    lastSuccessAt: asaStatus.lastSuccessAt ? new Date(asaStatus.lastSuccessAt).toISOString() : null,
+    lastFailureAt: asaStatus.lastFailureAt ? new Date(asaStatus.lastFailureAt).toISOString() : null,
+    lastError: asaStatus.lastError || null,
+    // healthy = сконфигурирован и последний исход — успех.
+    healthy: configured && asaStatus.lastSuccessAt >= asaStatus.lastFailureAt,
+  };
+}
+
 // Алерт о деградации ASA — не чаще раза в 10 минут, чтобы не заспамить лог,
 // но и не потерять момент, когда сервис тихо съехал на эвристику.
 let lastAsaWarnAt = 0;
@@ -119,10 +146,13 @@ function warnAsaDegraded(err: unknown): void {
   const now = Date.now();
   if (now - lastAsaWarnAt < 10 * 60 * 1000) return;
   lastAsaWarnAt = now;
-  console.error(
-    `[asa] popularity недоступна (${err instanceof Error ? err.message : err}) — ` +
-      'volume считается эвристикой. Обнови сессию .asa-session.json!',
-  );
+  const msg =
+    `popularity недоступна (${err instanceof Error ? err.message : err}) — ` +
+    'volume считается эвристикой. Обнови сессию .asa-session.json!';
+  console.error(`[asa] ${msg}`);
+  // Алерт в Telegram (no-op без TELEGRAM_* env): тихая деградация в проде =
+  // незаметно неточные данные у платящих пользователей.
+  notify(`⚠️ ASA: ${msg}`, 'asa-degraded');
 }
 
 export async function getVolume(
@@ -133,6 +163,7 @@ export async function getVolume(
     try {
       const [pop] = await keywordPopularity([term], country.toUpperCase());
       if (pop && pop.popularity !== null) {
+        asaStatus.lastSuccessAt = Date.now();
         return {
           score: pop.popularity,
           source: 'apple_search_ads',
@@ -140,6 +171,8 @@ export async function getVolume(
         };
       }
     } catch (e) {
+      asaStatus.lastFailureAt = Date.now();
+      asaStatus.lastError = e instanceof Error ? e.message : String(e);
       // сессия протухла / нет приложения / rate limit — фолбэк, но с алертом:
       // тихая деградация в проде = незаметно неточные данные.
       warnAsaDegraded(e);
