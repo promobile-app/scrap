@@ -14,6 +14,7 @@ import {
   type DiscoveryJobRow,
 } from '../db/repo.js';
 import { llmRelevantTerms, type RelevanceAppContext } from './relevance.js';
+import { notify } from '../notify.js';
 
 // Сколько уже сохранённых кандидатов нужно, чтобы пропустить дорогой BFS-этап
 // (генерацию терминов из метаданных / suggestions / конкурентов).
@@ -428,6 +429,9 @@ function rowToState(row: DiscoveryJobRow): DiscoveryJobState {
     appTitle: row.appTitle ?? row.appId,
     country: row.country,
     keywords: (row.keywords as UrlKeyword[]) ?? [],
+    // Текст ошибки ДОЛЖЕН доходить до клиента: без него расширение показывает
+    // generic «Analysis failed» и причину (бан IP, гео и т.п.) не видно никому.
+    error: row.error,
   };
 }
 
@@ -736,10 +740,14 @@ async function runJob(
       ).catch(() => {});
     }
   } catch (e) {
+    const msg = e instanceof Error ? e.message : 'ошибка обработки';
     await updateDiscoveryJob(jobId, {
       status: 'error',
-      error: e instanceof Error ? e.message : 'ошибка обработки',
+      error: msg,
     }).catch(() => {});
+    // Упавший анализ = пользователь увидел «Scan failed». Владелец должен
+    // узнать сразу (дедуп по тексту — волна одинаковых ошибок шлётся один раз).
+    notify(`❌ Discovery job #${jobId} (${platform}/${appId}/${country}): ${msg}`, `job-err:${msg.slice(0, 60)}`);
   }
 }
 

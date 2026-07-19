@@ -3,9 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <style>
-    /* Promobile design system (dark theme tokens from promobile-client
-       src/index.css) — единая экосистема: бренд #4766ff, поверхности
-       #0a0a0a / #1a1b1f, линии #393b42, шрифт Rubik, радиусы 12px. */
+    /* RankRadar — дизайн «Scope»: одна твёрдая поверхность #0b0c10 +
+       hairline-сетка вместо карточек, радар-развёртка как фирменный приём
+       всех состояний, фильтры-подчёркивания, цена внутри CTA.
+       Бренд Promobile: #4766ff, Rubik. */
     @font-face {
       font-family: "Rubik";
       src: url("fonts/Rubik-Regular.ttf") format("truetype");
@@ -22,21 +23,25 @@
       font-weight: 600 900;
     }
     :root {
-      --accent: #4766ff;          /* --brand-color */
+      --accent: #4766ff;
       --accent-hover: #3d5ae6;
-      --accent-soft: rgba(71, 102, 255, 0.2);  /* --color-table-row-hover */
-      --accent-text: #7a91ff;
-      --ink: #f2f4fc;             /* --text-primary */
-      --ink-2: #e9eaf2;           /* --text-secondary */
-      --muted: #a8aab2;           /* --text-caption */
-      --line: #393b42;            /* --border-color */
-      --bg: #0a0a0a;              /* --background-color */
-      --card: #1a1b1f;            /* --background-color-block */
-      --surface-2: #1a1b1f;
-      --inset: #0a0a0a;
-      --hover-neutral: #24252a;
-      --green: #12b76a;           /* --green-color */
-      --green-text: #32d583;
+      --accent-text: #8fa2ff;
+      --accent-soft: rgba(71, 102, 255, 0.12);
+      --ink: #f2f4fc;
+      --ink-2: #c9ccd6;
+      --muted: #8b8f9b;
+      --faint: #5d616c;
+      --bg: #0b0c10;          /* поверхность попапа */
+      --inset: #08090c;       /* утопленные зоны: контекст-бар, SERP, чипы */
+      --panel: #0e0f13;       /* метрики, sticky-шапка таблицы, квадрант */
+      --card: #14161b;        /* приподнятые элементы: аватар, secondary-кнопка */
+      --card-line: #2e3138;   /* бордер приподнятых элементов */
+      --line: #23252c;        /* основной hairline */
+      --line-2: #1d2026;      /* hairline внутри панелей */
+      --line-3: #16181d;      /* разделитель строк таблиц */
+      --row-hover: #101218;
+      --btn-hover: #1b1d24;
+      --green: #32d583;
       --red: #f04438;
       --yellow: #ffb554;
     }
@@ -45,6 +50,7 @@
     body {
       width: 380px;
       margin: 0;
+      border: 1px solid var(--line);
       border-radius: 16px;
       overflow: hidden;
       font-family: "Rubik", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
@@ -52,247 +58,404 @@
       color: var(--ink);
       font-size: 13px;
     }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes rrsweep { to { transform: rotate(360deg); } }
+    @keyframes rrblip { 0%, 100% { opacity: .1; } 50% { opacity: 1; } }
+
+    /* --- header --- */
     header {
-      display: flex; align-items: center; gap: 9px;
-      padding: 15px 17px;
+      display: flex; align-items: center; gap: 8px;
+      padding: 11px 14px;
       border-bottom: 1px solid var(--line);
     }
     .logo {
-      width: 32px; height: 32px; border-radius: 12px;
+      width: 26px; height: 26px; border-radius: 8px; flex: none;
       background: var(--accent);
       display: flex; align-items: center; justify-content: center;
     }
-    .title { font-weight: 600; font-size: 14px; flex: 1; }
+    .title { font-weight: 600; font-size: 13.5px; flex: 1; }
     .title span { color: var(--accent-text); }
-    .userbar { font-size: 11px; color: var(--muted); }
+    .userbar { font-size: 10.5px; color: var(--muted); }
     .userbar a { color: var(--accent-text); cursor: pointer; text-decoration: none; }
-    main { padding: 16px 17px 18px; min-height: 220px; }
+
+    /* --- tab bar (App / Keyword) — подчёркивания --- */
+    .tabbar { display: none; border-bottom: 1px solid var(--line); }
+    .tabbar.show { display: flex; }
+    .tabbar button {
+      flex: 1; font: inherit; font-size: 12px; font-weight: 600;
+      padding: 8px 0 7px; background: none; border: 0; cursor: pointer;
+      border-bottom: 2px solid transparent; color: var(--muted);
+      transition: color .12s;
+    }
+    .tabbar button:hover { color: var(--ink-2); }
+    .tabbar button.active { color: var(--ink); border-bottom-color: var(--accent); }
+
+    main { min-height: 220px; }
     .screen { display: none; }
     .screen.active { display: block; }
+
+    /* --- базовые элементы --- */
     input {
-      width: 100%; padding: 11px 14px; margin-bottom: 10px;
-      border: 1px solid var(--line); border-radius: 12px; outline: none;
-      background: var(--card); color: var(--ink); font: inherit;
+      padding: 10px 12px; border: 1px solid var(--card-line); border-radius: 8px;
+      outline: none; background: var(--inset); color: var(--ink);
+      font: inherit; font-size: 12.5px;
     }
     input:focus { border-color: var(--accent); }
+    input::placeholder { color: var(--faint); }
     .btn {
       font: inherit; font-weight: 600; font-size: 13px;
-      width: 100%;
-      padding: 12px 16px; border: 0; border-radius: 12px; cursor: pointer;
-      background: var(--accent); color: #fff;
+      width: 100%; padding: 11px 14px; border: 0; border-radius: 8px;
+      cursor: pointer; background: var(--accent); color: #fff;
       transition: background .15s;
     }
     .btn:hover:not(:disabled) { background: var(--accent-hover); }
     .btn:disabled { opacity: .55; cursor: not-allowed; }
-    .btn.secondary { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); }
-    .btn.secondary:hover:not(:disabled) { background: var(--hover-neutral); }
+    .btn.secondary { background: var(--card); color: var(--ink-2); border: 1px solid var(--card-line); }
+    .btn.secondary:hover:not(:disabled) { background: var(--btn-hover); }
     .muted { color: var(--muted); font-size: 12px; }
     .err { color: var(--red); font-size: 12px; margin: 6px 0; }
-    .ok { color: var(--green-text); font-size: 12px; margin: 6px 0; }
-    .switch {
-      text-align: center; margin-top: 12px; font-size: 12px; color: var(--muted);
-    }
-    .switch a { color: var(--accent-text); cursor: pointer; text-decoration: none; }
-    .app-card {
-      display: flex; align-items: center; gap: 10px;
-      background: var(--surface-2); border: 1px solid var(--line);
-      border-radius: 12px; padding: 12px; margin-bottom: 14px;
-    }
-    .app-card b { font-size: 13px; font-weight: 600; }
-    .mgrid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin: 14px 0; }
-    .mtile {
-      background: var(--surface-2); border: 1px solid var(--line);
-      border-radius: 12px; padding: 14px 10px; text-align: center;
-      transition: border-color .15s, background .15s;
-    }
-    .mtile.clickable { cursor: pointer; }
-    .mtile.clickable:hover { background: var(--hover-neutral); }
-    .mtile.active { border-color: var(--accent); background: var(--accent-soft); }
-    .mtile.active .mv { color: var(--accent-text); }
-    .mtile .mv { font-size: 22px; font-weight: 600; line-height: 1; }
-    .mtile .ml { font-size: 10px; color: var(--muted); margin-top: 6px;
-      font-weight: 500; text-transform: uppercase; letter-spacing: .3px; }
+    .ok { color: var(--green); font-size: 12px; margin: 6px 0; }
     .spinner {
-      width: 14px; height: 14px; border-radius: 50%;
+      width: 12px; height: 12px; border-radius: 50%;
       border: 2px solid var(--line); border-top-color: var(--accent);
       display: inline-block; vertical-align: -2px; margin-right: 6px;
       animation: spin .7s linear infinite;
     }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .progress {
-      height: 4px; border-radius: 2px; background: var(--surface-2);
-      overflow: hidden; margin: 12px 0;
-    }
-    .progress > div {
-      height: 100%; background: var(--accent); transition: width .3s;
-    }
-    .stages { font-size: 11px; color: var(--muted); margin: 6px 0; }
-    .price {
-      font-size: 28px; font-weight: 600; text-align: center; margin: 16px 0 6px;
-    }
-    .pitch {
-      text-align: center; font-size: 12px; color: var(--muted); margin-bottom: 14px;
-    }
-    .kw-list { max-height: 260px; overflow-y: auto; margin-top: 10px;
-      border: 1px solid var(--line); border-radius: 12px; }
-    .kw-list table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-    .kw-list th {
-      text-align: left; padding: 8px 11px; color: var(--muted);
-      font-size: 10px; font-weight: 600; text-transform: uppercase;
-      letter-spacing: .3px; background: var(--surface-2);
-      border-bottom: 1px solid var(--line); position: sticky; top: 0;
-    }
-    .kw-list td { padding: 8px 11px; border-bottom: 1px solid var(--line); }
-    .kw-list tr:last-child td { border-bottom: 0; }
-    .num { text-align: right; font-variant-numeric: tabular-nums; }
-    .rank-top { color: var(--green-text); font-weight: 600; }
-    .row-actions { display: flex; gap: 8px; margin-top: 10px; }
-    .row-actions .btn { width: auto; flex: 1; padding: 10px 12px; }
 
-    /* --- AI insights (action plan) --- */
-    .goal-row { display: flex; gap: 6px; margin: 14px 0 12px; }
-    .goal-pill {
-      flex: 1; text-align: center; padding: 7px 0; border-radius: 10px;
-      background: var(--surface-2); border: 1px solid var(--line);
-      color: var(--muted); font-size: 11px; cursor: pointer; transition: .15s;
+    /* --- контекст-бар (гео · стор · id) --- */
+    .ctx-strip {
+      display: flex; gap: 6px; align-items: center;
+      padding: 6px 14px; background: var(--inset);
+      border-bottom: 1px solid var(--line-2);
+      font-size: 10px; letter-spacing: .5px; text-transform: uppercase;
+      color: var(--muted); font-variant-numeric: tabular-nums;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    .goal-pill:hover { background: var(--hover-neutral); }
-    .goal-pill.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
-    .ai-summary {
-      display: flex; gap: 8px; align-items: flex-start;
-      background: var(--card); border: 1px solid var(--line); border-radius: 12px;
-      padding: 11px 12px; margin-bottom: 12px; line-height: 1.45; color: var(--ink-2);
+    .ctx-strip .id { text-transform: none; }
+
+    /* --- строка приложения --- */
+    .app-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 11px 14px; border-bottom: 1px solid var(--line);
     }
-    .ai-summary .ic { color: var(--accent-text); flex: none; font-size: 14px; line-height: 1.2; }
-    .plan-head { display: flex; align-items: center; justify-content: space-between; margin: 4px 0 8px; }
-    .plan-head .lbl {
-      font-size: 10px; font-weight: 600; letter-spacing: .4px;
+    .app-ava {
+      width: 34px; height: 34px; border-radius: 9px; flex: none;
+      background: var(--card); border: 1px solid var(--card-line);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 600; font-size: 14px; color: var(--accent-text);
+    }
+    .app-meta { flex: 1; min-width: 0; }
+    .app-t { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .app-d { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .app-badge {
+      font-size: 10px; font-weight: 500; color: var(--muted); flex: none;
+      border: 1px solid var(--card-line); border-radius: 6px;
+      padding: 3px 7px; letter-spacing: .4px;
+    }
+
+    /* --- полоса метрик --- */
+    .mstrip { display: flex; background: var(--panel); border-bottom: 1px solid var(--line); }
+    .mcell {
+      flex: 1; text-align: center; padding: 11px 0 9px;
+      border-left: 1px solid var(--line-2);
+      border-bottom: 2px solid transparent;
+    }
+    .mcell:first-child { border-left: 0; }
+    .mcell .mv { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1; }
+    .mcell .ml {
+      font-size: 9px; color: var(--muted); text-transform: uppercase;
+      letter-spacing: .6px; margin-top: 4px; font-weight: 500;
+    }
+    .mcell .mv.green { color: var(--green); }
+    .mcell .mv.warn { color: var(--yellow); }
+    .mcell.clickable { cursor: pointer; transition: background .12s; }
+    .mcell.clickable:hover { background: #12141a; }
+    .mcell.active { border-bottom-color: var(--accent); }
+    .mcell.active .mv { color: var(--accent-text); }
+
+    /* --- заголовки секций --- */
+    .sec-head, .plan-head {
+      display: flex; align-items: center; justify-content: space-between;
+      margin: 12px 14px 6px;
+    }
+    .sec-head .sec-lbl, .plan-head .lbl {
+      font-size: 9.5px; font-weight: 600; letter-spacing: .6px;
       text-transform: uppercase; color: var(--muted);
     }
-    .plan-head .dq { font-size: 11px; color: var(--muted); }
-    .plan { display: flex; flex-direction: column; gap: 7px; }
-    .act {
-      display: flex; gap: 10px; background: var(--surface-2);
-      border: 1px solid var(--line); border-left: 3px solid var(--muted);
-      border-radius: 9px; padding: 9px 11px;
+    .sec-head .sec-sub, .plan-head .dq {
+      font-size: 10px; color: var(--faint); font-variant-numeric: tabular-nums;
     }
-    .act .pr { color: var(--muted); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+    /* --- радар (состояния) --- */
+    .radar { position: relative; margin: 0 auto; }
+    .radar .rr-ring { position: absolute; border: 1px solid var(--line); border-radius: 50%; }
+    .radar .rr-ring.r2 { border-color: var(--line-2); }
+    .radar .rr-ring.dashed { border-style: dashed; border-color: var(--card-line); }
+    .radar .rr-ring.dashed.r2 { border-color: var(--line); }
+    .radar .rr-cross-h { position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: #181a20; }
+    .radar .rr-cross-v { position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; background: #181a20; }
+    .radar .rr-sweep {
+      position: absolute; inset: 0; border-radius: 50%;
+      background: conic-gradient(from 0deg, rgba(71, 102, 255, .4), rgba(71, 102, 255, 0) 80deg);
+      animation: rrsweep 2.6s linear infinite;
+    }
+    .radar .rr-sweep.fast {
+      background: conic-gradient(from 0deg, rgba(71, 102, 255, .45), rgba(71, 102, 255, 0) 90deg);
+      animation-duration: 1.8s;
+    }
+    .radar .rr-blip {
+      position: absolute; border-radius: 50%; background: var(--accent-text);
+      animation: rrblip 2.6s infinite;
+    }
+    .radar .rr-dot {
+      position: absolute; left: 50%; top: 50%; width: 4px; height: 4px;
+      margin: -2px; border-radius: 50%; background: var(--ink);
+    }
+
+    /* --- центрированные состояния (unsupported / payment / error / locked) --- */
+    .center-state {
+      padding: 32px 24px 32px;
+      display: flex; flex-direction: column; align-items: center; text-align: center;
+    }
+    .cs-title { font-size: 13.5px; font-weight: 600; margin-top: 14px; }
+    .cs-text { font-size: 12px; color: var(--muted); line-height: 1.55; margin-top: 5px; max-width: 250px; }
+    .center-state .btn { width: auto; margin-top: 16px; padding: 9px 24px; font-size: 12.5px; }
+
+    /* --- auth --- */
+    #screen-auth { padding: 18px 16px 16px; }
+    #screen-auth input { width: 100%; margin-bottom: 8px; }
+    .auth-sub { font-size: 11.5px; color: var(--muted); margin: 4px 0 14px; }
+    .switch { text-align: center; margin-top: 12px; font-size: 12px; color: var(--muted); }
+    .switch a { color: var(--accent-text); cursor: pointer; text-decoration: none; }
+
+    /* --- loading --- */
+    .load-body { padding: 20px 16px 18px; text-align: center; }
+    .load-title { font-size: 13px; font-weight: 600; }
+    .load-stage { font-size: 12px; color: var(--accent-text); font-variant-numeric: tabular-nums; margin-top: 3px; }
+    .progress { height: 3px; border-radius: 2px; background: var(--card); overflow: hidden; margin: 14px 8px 8px; }
+    .progress > div { height: 100%; background: var(--accent); transition: width .3s; }
+    .load-note { font-size: 11px; color: var(--faint); }
+
+    /* --- summary / paywall --- */
+    .tz-head {
+      display: grid; grid-template-columns: 1fr 44px 50px 42px;
+      padding: 6px 14px; border-bottom: 1px solid var(--line);
+      font-size: 9px; font-weight: 600; letter-spacing: .5px;
+      text-transform: uppercase; color: var(--muted);
+    }
+    .tz-head span + span { text-align: right; }
+    .tz-row {
+      display: grid; grid-template-columns: 1fr 44px 50px 42px; align-items: center;
+      padding: 7px 14px; border-bottom: 1px solid var(--line-3);
+      font-size: 12px; font-variant-numeric: tabular-nums;
+    }
+    .tz-row span { text-align: right; color: var(--ink-2); }
+    .tz-row span:first-child { text-align: left; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tz-row .rank-top { color: var(--green); font-weight: 600; }
+    .tz-wrap { position: relative; }
+    .tz-blur { filter: blur(5px); pointer-events: none; user-select: none; }
+    .tz-overlay {
+      position: absolute; inset: 0;
+      background: linear-gradient(180deg, rgba(11, 12, 16, 0) 0%, rgba(11, 12, 16, .6) 50%, var(--bg) 100%);
+      display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+      padding-bottom: 4px;
+    }
+    .tz-overlay .tz-more { font-size: 11px; color: var(--muted); margin-top: 3px; }
+    .benefits { padding: 12px 16px 2px; display: flex; flex-direction: column; gap: 7px; }
+    .benefit { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2); }
+    .paybox { padding: 14px 16px 4px; }
+    .btn.pay { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-radius: 10px; }
+    .btn.pay .price { font-variant-numeric: tabular-nums; }
+    .paynote { text-align: center; font-size: 10.5px; color: var(--faint); margin-top: 7px; }
+    .relink { text-align: center; padding: 4px 0 14px; }
+    .relink span { font-size: 12px; color: var(--accent-text); cursor: pointer; }
+    #summary-empty { padding: 14px; text-align: center; margin: 0; }
+
+    /* --- unlocked: управление --- */
+    .ctrl-row { display: flex; align-items: center; gap: 8px; padding: 10px 14px 0; }
+    .goals { display: flex; gap: 2px; flex: 1; }
+    .goal-pill {
+      font-size: 11px; font-weight: 600; padding: 5px 9px; border-radius: 7px;
+      cursor: pointer; color: var(--muted); transition: .12s;
+    }
+    .goal-pill:hover { background: var(--row-hover); color: var(--ink-2); }
+    .goal-pill.active { background: rgba(71, 102, 255, .14); color: var(--accent-text); }
+    .lang-seg { display: inline-flex; border: 1px solid var(--card-line); border-radius: 7px; overflow: hidden; }
+    .lang-seg button {
+      font: inherit; font-size: 10px; font-weight: 600; padding: 4px 8px;
+      border: 0; background: none; color: var(--muted); cursor: pointer;
+    }
+    .lang-seg button + button { border-left: 1px solid var(--card-line); }
+    .lang-seg button.active { background: rgba(71, 102, 255, .14); color: var(--accent-text); }
+
+    /* --- AI insights --- */
+    .ai-summary {
+      margin: 10px 14px 0; padding: 10px 12px;
+      background: var(--card); border-left: 2px solid var(--accent);
+      border-radius: 0 8px 8px 0;
+      font-size: 12px; line-height: 1.55; color: var(--ink-2);
+    }
+    .ai-loading { color: var(--muted); font-size: 12px; padding: 12px 14px; }
+    .quad {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 1px;
+      background: var(--line);
+      border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+    }
+    .qcell { background: var(--panel); padding: 8px 10px 9px; min-height: 62px; }
+    .qcell.empty { opacity: .55; }
+    .qcell .qh { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; }
+    .qcell .qdot { width: 6px; height: 6px; border-radius: 2px; background: var(--muted); flex: none; }
+    .qcell .qt {
+      font-size: 9.5px; font-weight: 600; letter-spacing: .4px;
+      text-transform: uppercase; color: var(--muted); flex: 1;
+    }
+    .qcell .qn { font-size: 10px; color: var(--faint); font-variant-numeric: tabular-nums; }
+    .qchips { display: flex; flex-wrap: wrap; gap: 3px; }
+    .qchip {
+      font-size: 10px; padding: 2px 6px; border-radius: 5px;
+      background: var(--inset); border: 1px solid var(--line-2); color: var(--ink-2);
+      max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .qmore { font-size: 10px; color: var(--faint); padding: 2px; }
+    .qcell.qw .qdot { background: var(--green); }       .qcell.qw .qt { color: var(--green); }
+    .qcell.push .qdot { background: var(--accent); }    .qcell.push .qt { color: var(--accent-text); }
+    .qcell.long .qdot { background: var(--yellow); }    .qcell.long .qt { color: var(--yellow); }
+    .qcell.ignore .qdot { background: var(--faint); }   .qcell.ignore .qt { color: var(--muted); }
+
+    .plan { display: flex; flex-direction: column; }
+    .act {
+      display: flex; gap: 9px; padding: 8px 14px 8px 12px;
+      border-top: 1px solid var(--line-3);
+      border-left: 2px solid var(--muted);
+    }
+    .act .pr {
+      width: 12px; font-size: 11px; color: var(--faint); font-weight: 600;
+      font-variant-numeric: tabular-nums; padding-top: 1px; flex: none;
+    }
     .act .body { flex: 1; min-width: 0; }
-    .act .top { display: flex; align-items: center; gap: 7px; margin-bottom: 3px; }
-    .act .term { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .act .rk { margin-left: auto; color: var(--muted); font-size: 11px; flex: none; }
-    .act .rk.rank-top { color: var(--green-text); font-weight: 600; }
-    .act .why { color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+    .act .top { display: flex; align-items: center; gap: 7px; }
+    .act .term { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .act .rk { margin-left: auto; color: var(--muted); font-size: 11px; flex: none; font-variant-numeric: tabular-nums; }
+    .act .rk.rank-top { color: var(--green); font-weight: 600; }
+    .act .why { color: var(--muted); font-size: 11px; line-height: 1.45; margin-top: 2px; }
     .badge {
-      font-size: 9.5px; font-weight: 600; text-transform: uppercase;
-      letter-spacing: .3px; padding: 2px 7px; border-radius: 6px; flex: none;
+      font-size: 9px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .4px; padding: 2px 6px; border-radius: 5px; flex: none;
     }
     .act.push-qw { border-left-color: var(--green); }
-    .badge.push-qw { background: rgba(18, 183, 106, 0.15); color: var(--green-text); }
+    .badge.push-qw { background: rgba(50, 213, 131, 0.12); color: var(--green); }
     .act.push { border-left-color: var(--accent); }
     .badge.push { background: var(--accent-soft); color: var(--accent-text); }
-    .act.monitor { border-left-color: var(--line); }
-    .badge.monitor { background: var(--hover-neutral); color: var(--muted); }
+    .act.monitor { border-left-color: var(--card-line); }
+    .badge.monitor { background: var(--card); color: var(--muted); }
     .act.skip { border-left-color: var(--red); opacity: .8; }
-    .badge.skip { background: rgba(240, 68, 56, 0.15); color: #f97066; }
-    .ai-loading { color: var(--muted); font-size: 12px; padding: 10px 2px; }
+    .badge.skip { background: rgba(240, 68, 56, 0.12); color: #f97066; }
 
-    /* --- demand × difficulty quadrant --- */
-    .quad-cap {
-      display: flex; align-items: center; gap: 6px; margin: 4px 0 8px;
-      font-size: 10px; font-weight: 600; letter-spacing: .3px;
-      text-transform: uppercase; color: var(--muted);
+    /* --- кнопки действий --- */
+    /* --- Tracking tab --- */
+    .trk-app { border: 1px solid var(--line-3); border-radius: 12px; margin: 0 14px 10px; overflow: hidden; }
+    .trk-head-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer; }
+    .trk-head-row:hover { background: rgba(255,255,255,0.02); }
+    .trk-t { flex: 1; min-width: 0; font-weight: 600; font-size: 13px;
+             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .trk-sub { font-size: 11px; color: var(--ink-3); }
+    .trk-badge { font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 8px; white-space: nowrap; }
+    .trk-badge.up { color: #32d583; background: rgba(50,213,131,0.1); }
+    .trk-badge.down { color: #f97066; background: rgba(249,112,102,0.1); }
+    .trk-badge.flat { color: var(--ink-3); background: rgba(255,255,255,0.04); }
+    .trk-body { border-top: 1px solid var(--line-3); }
+    .trk-kw { display: flex; align-items: center; gap: 8px; padding: 7px 12px; font-size: 12px;
+              border-bottom: 1px solid var(--line-3); }
+    .trk-kw:last-child { border-bottom: 0; }
+    .trk-kw .term { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .trk-kw .rk { font-variant-numeric: tabular-nums; width: 38px; text-align: right; }
+    .trk-kw .dl { font-variant-numeric: tabular-nums; width: 40px; text-align: right; font-weight: 700; }
+    .trk-kw .dl.up { color: #32d583; }
+    .trk-kw .dl.down { color: #f97066; }
+    .trk-kw .dl.flat { color: var(--ink-3); font-weight: 400; }
+    .trk-spark { width: 64px; height: 18px; flex: none; }
+    .trk-spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.4; }
+    .trk-untrack { padding: 8px 12px; text-align: right; }
+    .trk-untrack a { color: var(--ink-3); font-size: 11px; cursor: pointer; }
+    .trk-untrack a:hover { color: #f97066; }
+    .trk-empty { padding: 24px 14px; text-align: center; color: var(--ink-3); font-size: 12px; }
+    .row-actions { display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line-3); }
+    .row-actions .btn {
+      width: auto; flex: 1; padding: 10px 12px; font-size: 12.5px;
+      display: flex; align-items: center; justify-content: center; gap: 7px;
     }
-    .quad-cap .sub { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted); }
-    .quad { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 14px; }
-    .qcell {
-      background: var(--surface-2); border: 1px solid var(--line);
-      border-top: 2px solid var(--muted); border-radius: 10px; padding: 9px 10px;
-    }
-    .qcell.empty { opacity: .5; }
-    .qcell .qh { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-    .qcell .qt { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; }
-    .qcell .qn { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
-    .qchips { display: flex; flex-wrap: wrap; gap: 4px; }
-    .qchip {
-      font-size: 10.5px; padding: 2px 6px; border-radius: 6px; background: var(--inset);
-      border: 1px solid var(--line); color: var(--ink-2); max-width: 100%;
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    }
-    .qmore { font-size: 10.5px; color: var(--muted); padding: 2px; }
-    .qcell.qw { border-top-color: var(--green); }        .qcell.qw .qt { color: var(--green-text); }
-    .qcell.push { border-top-color: var(--accent); }     .qcell.push .qt { color: var(--accent-text); }
-    .qcell.long { border-top-color: var(--yellow); }     .qcell.long .qt { color: var(--yellow); }
-    .qcell.ignore { border-top-color: var(--line); }     .qcell.ignore .qt { color: var(--muted); }
+    .row-actions .btn.secondary { flex: none; padding: 10px 14px; }
+    .row-actions .btn svg { flex: none; }
 
-    /* --- language toggle --- */
-    .lang-row { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin: 14px 0 0; }
-    .lang-row .lang-lbl { font-size: 11px; color: var(--muted); }
-    .lang-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
-    .lang-seg button {
-      font: inherit; font-size: 11px; font-weight: 600; padding: 5px 11px;
-      border: 0; background: var(--surface-2); color: var(--muted); cursor: pointer;
+    /* --- таблица ключей --- */
+    .sec-head.kwcap { margin: 0; padding: 2px 14px 6px; }
+    .kw-list { max-height: 236px; overflow-y: auto; border-top: 1px solid var(--line); }
+    .kw-list table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .kw-list th {
+      text-align: left; padding: 6px 8px; color: var(--muted);
+      font-size: 9px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .5px; background: var(--panel);
+      border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 2;
     }
-    .lang-seg button + button { border-left: 1px solid var(--line); }
-    .lang-seg button.active { background: var(--accent-soft); color: var(--accent-text); }
-
-    /* --- SERP: топ выдачи по ключу (разворот строки) --- */
+    .kw-list td {
+      padding: 7px 8px; border-bottom: 1px solid var(--line-3);
+      font-variant-numeric: tabular-nums;
+    }
+    .kw-list th:first-child, .kw-list td:first-child { padding-left: 14px; }
+    .kw-list th:last-child, .kw-list td:last-child { padding-right: 14px; }
+    .kw-list tr:last-child td { border-bottom: 0; }
+    .num { text-align: right !important; color: var(--ink-2); }
+    .rank-top { color: var(--green); font-weight: 600; }
     .kw-list tr.kw-row { cursor: pointer; }
-    .kw-list tr.kw-row:hover td { background: var(--hover-neutral); }
-    .kw-list td.kw-term::before { content: '▸ '; color: var(--muted); }
+    .kw-list tr.kw-row:hover td { background: var(--row-hover); }
+    .kw-list td.kw-term::before { content: '▸ '; color: var(--faint); font-size: 10px; }
     .kw-list tr.kw-row.open td.kw-term::before { content: '▾ '; color: var(--accent-text); }
+
+    /* --- SERP (разворот строки) --- */
     .serp-row td { padding: 0 !important; background: var(--inset); }
-    .serp-head { font-size: 10px; color: var(--muted); padding: 7px 11px 4px; }
-    .serp { max-height: 200px; overflow-y: auto; padding: 0 6px 8px; }
-    .serp-item { display: flex; gap: 8px; align-items: center; padding: 4px 6px;
-      border-bottom: 1px solid var(--line); font-size: 12px; }
-    .serp-item:last-child { border-bottom: 0; }
-    .serp-item .sp-pos { width: 30px; text-align: right; color: var(--muted);
-      font-variant-numeric: tabular-nums; flex: none; }
-    .serp-item .sp-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .serp-item.me { background: var(--accent-soft); border-radius: 6px; }
-    .serp-item.me .sp-pos, .serp-item.me .sp-title { color: var(--accent-text); font-weight: 600; }
-    .serp-load { padding: 10px 11px; color: var(--muted); font-size: 12px; }
-
-    /* --- tab bar (App / Keyword) --- */
-    .tabbar { display: none; gap: 6px; margin-bottom: 14px; }
-    .tabbar.show { display: flex; }
-    .tabbar button {
-      font: inherit; font-weight: 600; font-size: 12px; flex: 1;
-      padding: 9px 0; border-radius: 11px; cursor: pointer;
-      background: var(--surface-2); border: 1px solid var(--line); color: var(--muted);
-      transition: .15s;
+    .serp-head { font-size: 10px; color: var(--faint); padding: 7px 14px 5px; }
+    .serp { max-height: 200px; overflow-y: auto; padding: 0 8px 8px; }
+    .serp-item {
+      display: flex; gap: 8px; align-items: center; padding: 3px 6px;
+      border-radius: 5px; font-size: 11.5px; color: var(--ink-2);
     }
-    .tabbar button:hover { background: var(--hover-neutral); }
-    .tabbar button.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); }
+    .serp-item .sp-pos { width: 18px; text-align: right; color: var(--faint); font-variant-numeric: tabular-nums; flex: none; }
+    .serp-item .sp-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .serp-item.me { background: var(--accent-soft); }
+    .serp-item.me .sp-pos, .serp-item.me .sp-title { color: var(--accent-text); font-weight: 600; }
+    .serp-load { padding: 10px 14px; color: var(--muted); font-size: 12px; }
 
-    /* --- keyword check screen --- */
-    .kw-ctx { display: flex; align-items: center; gap: 6px; font-size: 11px;
-      color: var(--muted); margin-bottom: 10px; }
-    .mgrid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 14px 0 4px; }
-    /* Top apps: иконка + название/разработчик + плашка позиции */
-    .kw-app { display: flex; align-items: center; gap: 9px; padding: 7px 10px;
-      border-bottom: 1px solid var(--line); }
+    /* --- keyword check --- */
+    .kw-form { display: flex; gap: 8px; padding: 12px 14px 0; }
+    .kw-form input { flex: 1; min-width: 0; }
+    .kw-form .btn { width: auto; padding: 9px 16px; font-size: 12.5px; }
+    .kw-apps { border-top: 1px solid var(--line-3); }
+    .kw-app { display: flex; align-items: center; gap: 9px; padding: 7px 14px; border-bottom: 1px solid var(--line-3); }
     .kw-app:last-child { border-bottom: 0; }
-    .kw-app.me { background: var(--accent-soft); }
-    .kw-pos { width: 24px; height: 22px; flex: none; display: inline-flex;
+    .kw-app.me { background: var(--accent-soft); border-left: 2px solid var(--accent); padding-left: 12px; }
+    .kw-pos {
+      width: 24px; height: 22px; flex: none; display: inline-flex;
       align-items: center; justify-content: center; font-size: 11px; font-weight: 600;
       font-variant-numeric: tabular-nums; color: var(--muted); background: var(--inset);
-      border: 1px solid var(--line); border-radius: 7px; }
+      border: 1px solid var(--line); border-radius: 6px;
+    }
     .kw-app.me .kw-pos { background: var(--accent); border-color: var(--accent); color: #fff; }
-    .kw-ic { width: 30px; height: 30px; border-radius: 8px; flex: none; background: var(--inset); object-fit: cover; }
+    .kw-ic {
+      width: 28px; height: 28px; border-radius: 7px; flex: none;
+      background: var(--card); border: 1px solid var(--card-line); object-fit: cover;
+    }
+    .kw-app.me .kw-ic { border-color: var(--accent); }
     .kw-meta { min-width: 0; }
     .kw-t { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .kw-app.me .kw-t { color: var(--accent-text); font-weight: 600; }
-    .kw-d { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #kw-locked { text-align: center; padding: 22px 8px; }
-    #kw-locked .lock { font-size: 26px; margin-bottom: 8px; }
+    .kw-d { font-size: 10.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #kw-locked-text b { display: block; font-size: 13.5px; font-weight: 600; color: var(--ink); margin-bottom: 5px; }
   </style>
 </head>
 <body>
   <header>
     <div class="logo">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
         <circle cx="12" cy="12" r="9.5" stroke="#fff" stroke-width="1.6" opacity=".5"/>
         <circle cx="12" cy="12" r="5.5" stroke="#fff" stroke-width="1.6" opacity=".8"/>
         <circle cx="12" cy="12" r="2" fill="#fff"/>
@@ -302,17 +465,20 @@
     <div class="title">Rank<span>Radar</span></div>
     <div class="userbar" id="userbar"></div>
   </header>
-  <main>
 
-    <!-- TAB BAR (App / Keyword) — виден только залогиненным -->
-    <div class="tabbar" id="tabbar">
-      <button type="button" data-tab="app">App</button>
-      <button type="button" data-tab="keyword">Keyword</button>
-    </div>
+  <!-- TAB BAR (App / Keyword) — виден только залогиненным -->
+  <div class="tabbar" id="tabbar">
+    <button type="button" data-tab="app">App</button>
+    <button type="button" data-tab="keyword">Keyword</button>
+    <button type="button" data-tab="tracking">Tracking</button>
+  </div>
+
+  <main>
 
     <!-- 1. AUTH -->
     <div class="screen" id="screen-auth">
-      <div id="auth-title" style="font-weight:600;font-size:14px;margin-bottom:10px">Sign in</div>
+      <div id="auth-title" style="font-weight:600;font-size:15px">Sign in</div>
+      <div class="auth-sub">Keyword intel for the app page you're on.</div>
       <input id="email" type="email" placeholder="Email" autocomplete="email" />
       <input id="password" type="password" placeholder="Password" autocomplete="current-password" />
       <div id="auth-err" class="err" style="display:none"></div>
@@ -325,72 +491,126 @@
 
     <!-- 2. UNSUPPORTED PAGE -->
     <div class="screen" id="screen-unsupported">
-      <p class="muted" style="margin-top:18px;text-align:center">
-        Unsupported page.<br/>Please open an App Store or Google Play app page.
-      </p>
+      <div class="center-state" style="padding-top:34px;padding-bottom:36px">
+        <div class="radar" style="width:76px;height:76px">
+          <div class="rr-ring dashed" style="inset:0"></div>
+          <div class="rr-ring dashed r2" style="inset:18px"></div>
+          <div style="position:absolute;left:50%;top:50%;width:6px;height:6px;margin:-3px;border-radius:50%;background:#3a3d45"></div>
+        </div>
+        <div class="cs-title">Nothing on radar</div>
+        <div class="cs-text">Open an App Store or Google Play app page — RankRadar will scan it automatically.</div>
+      </div>
     </div>
 
     <!-- 3. LOADING -->
     <div class="screen" id="screen-loading">
       <div id="loading-app" class="app-card" style="display:none"></div>
-      <p><span class="spinner"></span><b>Analyzing app...</b></p>
-      <p class="muted">This may take up to 90 seconds.</p>
-      <div class="progress"><div id="progress-bar" style="width:5%"></div></div>
-      <p id="stage" class="stages">Fetching app data...</p>
+      <div class="load-body">
+        <div class="radar" style="width:140px;height:140px;margin-bottom:16px">
+          <div class="rr-ring" style="inset:0"></div>
+          <div class="rr-ring r2" style="inset:23px"></div>
+          <div class="rr-ring r2" style="inset:46px"></div>
+          <div class="rr-cross-h"></div>
+          <div class="rr-cross-v"></div>
+          <div class="rr-sweep"></div>
+          <div class="rr-blip" style="left:38px;top:50px;width:5px;height:5px"></div>
+          <div class="rr-blip" style="left:94px;top:34px;width:4px;height:4px;animation-delay:.9s"></div>
+          <div class="rr-blip" style="left:82px;top:98px;width:5px;height:5px;animation-delay:1.7s"></div>
+          <div class="rr-dot"></div>
+        </div>
+        <div class="load-title">Analyzing keyword rankings</div>
+        <div id="stage" class="load-stage">Fetching app data...</div>
+        <div class="progress"><div id="progress-bar" style="width:5%"></div></div>
+        <div class="load-note">This may take up to 90 seconds.</div>
+      </div>
     </div>
 
-    <!-- 4. SUMMARY -->
+    <!-- 4. SUMMARY / PAYWALL -->
     <div class="screen" id="screen-summary">
       <div id="summary-app" class="app-card"></div>
-      <div class="mgrid">
-        <div class="mtile"><div class="mv" id="m-ranked">0</div><div class="ml">Ranked</div></div>
-        <div class="mtile"><div class="mv" id="m-top3">0</div><div class="ml">Top 3</div></div>
-        <div class="mtile"><div class="mv" id="m-top10">0</div><div class="ml">Top 10</div></div>
+      <div class="mstrip">
+        <div class="mcell"><div class="mv" id="m-ranked">0</div><div class="ml">Ranked</div></div>
+        <div class="mcell"><div class="mv green" id="m-top3">0</div><div class="ml">Top 3</div></div>
+        <div class="mcell"><div class="mv" id="m-top10">0</div><div class="ml">Top 10</div></div>
       </div>
-      <p id="summary-empty" class="muted" style="display:none;text-align:center">
-        No keyword rankings found.
-      </p>
-      <div class="price">$4.99</div>
-      <p class="pitch">Unlock full keyword list and download as Excel.</p>
-      <button id="unlock-btn" class="btn">Unlock full report</button>
-      <button id="reanalyze-btn" class="btn secondary" style="margin-top:8px">Re-analyze</button>
+      <p id="summary-empty" class="muted" style="display:none">No keyword rankings found.</p>
+      <div id="summary-report">
+        <div class="sec-head">
+          <span class="sec-lbl">Full report</span>
+          <span class="sec-sub" id="summary-count"></span>
+        </div>
+        <div class="tz-head"><span>Keyword</span><span>Rank</span><span>Volume</span><span>Diff</span></div>
+        <div class="tz-wrap" id="summary-teaser"></div>
+      </div>
+      <div class="benefits">
+        <div class="benefit"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6.2 5 9 10 3.2" stroke="#32d583" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Full reports for <b>every</b> app — unlimited</div>
+        <div class="benefit"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6.2 5 9 10 3.2" stroke="#32d583" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>AI action plans + volume &amp; difficulty</div>
+        <div class="benefit"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6.2 5 9 10 3.2" stroke="#32d583" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Keyword checks &amp; Excel export (.xlsx)</div>
+      </div>
+      <div class="paybox">
+        <button id="unlock-btn" class="btn pay"><span>Go Pro</span><span class="price">$9.99/mo</span></button>
+        <div class="paynote">Subscription · All apps · Cancel anytime</div>
+      </div>
+      <div class="relink"><span id="reanalyze-btn">Re-analyze</span></div>
     </div>
 
     <!-- 5. PAYMENT WAITING -->
     <div class="screen" id="screen-payment">
-      <p><span class="spinner"></span><b>Waiting for payment...</b></p>
-      <p class="muted">Complete the payment in the opened tab. We'll unlock the report automatically.</p>
-      <button id="payment-cancel" class="btn secondary" style="margin-top:14px">Cancel</button>
+      <div class="center-state">
+        <div class="radar" style="width:56px;height:56px">
+          <div class="rr-ring" style="inset:0"></div>
+          <div class="rr-ring r2" style="inset:14px"></div>
+          <div class="rr-sweep fast"></div>
+          <div class="rr-dot"></div>
+        </div>
+        <div class="cs-title">Waiting for payment…</div>
+        <div class="cs-text">Complete checkout in the opened tab — Pro activates automatically.</div>
+        <button id="payment-cancel" class="btn secondary">Cancel</button>
+      </div>
     </div>
 
     <!-- 6. UNLOCKED -->
     <div class="screen" id="screen-unlocked">
       <div id="unlocked-app" class="app-card"></div>
-      <div class="mgrid">
-        <div class="mtile clickable" id="u-tile-ranked">
+      <div class="mstrip">
+        <div class="mcell clickable" id="u-tile-ranked">
           <div class="mv" id="u-ranked">0</div><div class="ml">Ranked</div></div>
-        <div class="mtile clickable" id="u-tile-top3">
+        <div class="mcell clickable" id="u-tile-top3">
           <div class="mv" id="u-top3">0</div><div class="ml">Top 3</div></div>
-        <div class="mtile clickable" id="u-tile-top10">
+        <div class="mcell clickable" id="u-tile-top10">
           <div class="mv" id="u-top10">0</div><div class="ml">Top 10</div></div>
       </div>
 
-      <div class="lang-row">
+      <div class="ctrl-row">
+        <div class="goals">
+          <div class="goal-pill active" data-goal="rank_up">Rank up</div>
+          <div class="goal-pill" data-goal="expand">Expand</div>
+          <div class="goal-pill" data-goal="defend">Defend</div>
+        </div>
         <div class="lang-seg" id="lang-seg">
           <button type="button" data-lang="en">EN</button>
           <button type="button" data-lang="ru">RU</button>
         </div>
       </div>
-      <div class="goal-row">
-        <div class="goal-pill active" data-goal="rank_up">Rank up</div>
-        <div class="goal-pill" data-goal="expand">Expand</div>
-        <div class="goal-pill" data-goal="defend">Defend</div>
-      </div>
       <div id="ai-insights"></div>
 
-      <div class="row-actions" style="margin-top:14px">
-        <button id="download-btn" class="btn">⬇ Download Excel</button>
-        <button id="u-reanalyze-btn" class="btn secondary">↻ Re-analyze</button>
+      <div class="row-actions">
+        <button id="download-btn" class="btn">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6.5 7 9.5 10 6.5" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.5 11.5h9" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/></svg>
+          <span id="download-label">Download Excel</span>
+        </button>
+        <button id="track-btn" class="btn secondary">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M7 1.8c-2 0-3.4 1.5-3.4 3.6 0 2.8-1 3.6-1.5 4.1h9.8c-.5-.5-1.5-1.3-1.5-4.1 0-2.1-1.4-3.6-3.4-3.6Z" stroke="#c9ccd6" stroke-width="1.3" stroke-linejoin="round"/><path d="M5.7 11.6a1.4 1.4 0 0 0 2.6 0" stroke="#c9ccd6" stroke-width="1.3" stroke-linecap="round"/></svg>
+          <span id="track-label">Track</span>
+        </button>
+        <button id="u-reanalyze-btn" class="btn secondary">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M11.5 7a4.5 4.5 0 1 1-1.3-3.2" stroke="#c9ccd6" stroke-width="1.4" stroke-linecap="round"/><path d="M11.8 1.6v2.8H9" stroke="#c9ccd6" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span id="u-reanalyze-label">Re-analyze</span>
+        </button>
+      </div>
+      <div class="sec-head kwcap">
+        <span class="sec-lbl" id="kw-list-cap">All keywords</span>
+        <span class="sec-sub" id="kw-count"></span>
       </div>
       <div class="kw-list" id="kw-list"></div>
     </div>
@@ -398,23 +618,64 @@
     <!-- 8. KEYWORD CHECK (платная фича) -->
     <div class="screen" id="screen-keyword">
       <div id="kw-locked" style="display:none">
-        <div class="lock">🔒</div>
-        <p class="muted" id="kw-locked-text">
-          Keyword check is a premium feature.<br/>Unlock any app report to enable it.
-        </p>
+        <div class="center-state" style="padding-bottom:34px">
+          <div class="radar" style="width:64px;height:64px">
+            <div class="rr-ring dashed" style="inset:0"></div>
+            <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%)">
+              <svg width="20" height="20" viewBox="0 0 16 16" fill="none"><rect x="3" y="7" width="10" height="6.5" rx="1.5" stroke="#8b8f9b" stroke-width="1.3"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" stroke="#8b8f9b" stroke-width="1.3"/></svg>
+            </div>
+          </div>
+          <p class="cs-text" id="kw-locked-text" style="margin-top:14px">
+            <b>Keyword check is a Pro feature</b>Subscribe from any app report to enable it.
+          </p>
+        </div>
       </div>
       <div id="kw-main">
-        <div class="kw-ctx" id="kw-ctx"></div>
-        <input id="kw-input" type="text" placeholder="Enter a keyword" autocomplete="off" />
-        <button id="kw-check" class="btn">Check</button>
+        <div class="ctx-strip" id="kw-ctx"></div>
+        <div class="kw-form">
+          <input id="kw-input" type="text" placeholder="Enter a keyword" autocomplete="off" />
+          <button id="kw-check" class="btn">Check</button>
+        </div>
         <div id="kw-result"></div>
+      </div>
+    </div>
+
+    <!-- 9. TRACKING (платная фича) -->
+    <div class="screen" id="screen-tracking">
+      <div id="trk-locked" style="display:none">
+        <div class="center-state" style="padding-bottom:34px">
+          <div class="radar" style="width:64px;height:64px">
+            <div class="rr-ring dashed" style="inset:0"></div>
+            <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%)">
+              <svg width="20" height="20" viewBox="0 0 16 16" fill="none"><rect x="3" y="7" width="10" height="6.5" rx="1.5" stroke="#8b8f9b" stroke-width="1.3"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" stroke="#8b8f9b" stroke-width="1.3"/></svg>
+            </div>
+          </div>
+          <p class="cs-text" id="trk-locked-text" style="margin-top:14px">
+            <b>Tracking is a Pro feature</b>Subscribe from any app report to enable it.
+          </p>
+        </div>
+      </div>
+      <div id="trk-main">
+        <div class="sec-head" style="margin-top:4px">
+          <span class="sec-lbl" id="trk-cap">Tracked apps</span>
+          <span class="sec-sub" id="trk-note">checked every 3h</span>
+        </div>
+        <div id="trk-list"></div>
       </div>
     </div>
 
     <!-- 7. ERROR -->
     <div class="screen" id="screen-error">
-      <p id="error-text" class="err" style="text-align:center;margin-top:18px"></p>
-      <button id="error-retry" class="btn" style="margin-top:10px">Try again</button>
+      <div class="center-state">
+        <div class="radar" style="width:64px;height:64px">
+          <div class="rr-ring" style="inset:0;border-color:var(--card-line)"></div>
+          <div class="rr-ring r2" style="inset:16px;border-color:var(--line)"></div>
+          <div style="position:absolute;left:50%;top:50%;width:8px;height:8px;margin:-4px;border-radius:50%;background:var(--red)"></div>
+        </div>
+        <div class="cs-title">Scan failed</div>
+        <p id="error-text" class="cs-text" style="white-space:pre-line"></p>
+        <button id="error-retry" class="btn">Try again</button>
+      </div>
     </div>
 
   </main>

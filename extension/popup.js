@@ -51,6 +51,7 @@ const screens = {
   unlocked: document.getElementById('screen-unlocked'),
   error: document.getElementById('screen-error'),
   keyword: document.getElementById('screen-keyword'),
+  tracking: document.getElementById('screen-tracking'),
 };
 
 // Экраны, относящиеся к вкладке «App» (анализ открытой страницы стора). 'keyword'
@@ -67,7 +68,7 @@ function show(name) {
   const showTabs = !!token && name !== 'auth';
   tabbarEl.classList.toggle('show', showTabs);
   if (showTabs) {
-    const active = name === 'keyword' ? 'keyword' : 'app';
+    const active = name === 'keyword' ? 'keyword' : name === 'tracking' ? 'tracking' : 'app';
     tabbarEl.querySelectorAll('button').forEach((b) =>
       b.classList.toggle('active', b.dataset.tab === active));
   }
@@ -154,15 +155,26 @@ function openTab(url) {
   }
 }
 
+// Блок приложения: контекст-бар (гео · стор · id) + строка с аватаром и бейджем.
 function appCardHtml(d) {
-  const flag = FLAGS[d.country] || (d.country || '').toUpperCase();
-  const platformIcon = d.platform === 'android'
-    ? '<span style="color:#34A853;font-weight:700">▶</span>'
-    : '<span style="color:#1f9bf5;font-weight:700">A</span>';
-  return `${platformIcon}
-    <span>${flag}</span>
-    <b style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-      ${d.appTitle || d.appId}</b>`;
+  const flag = FLAGS[d.country] || '';
+  const cc = (d.country || 'us').toUpperCase();
+  const store = d.platform === 'android' ? 'Google Play' : 'App Store';
+  const os = d.platform === 'android' ? 'Android' : 'iOS';
+  const title = d.appTitle || String(d.appId || '');
+  const letter = (title.trim().charAt(0) || '?').toUpperCase();
+  const idPart = d.platform === 'android'
+    ? escHtml(String(d.appId || ''))
+    : 'id' + escHtml(String(d.appId || ''));
+  return `<div class="ctx-strip">${flag ? flag + ' ' : ''}${cc} · ${store} · <span class="id">${idPart}</span></div>
+    <div class="app-row">
+      <div class="app-ava">${escHtml(letter)}</div>
+      <div class="app-meta">
+        <div class="app-t">${escHtml(title)}</div>
+        <div class="app-d">${escHtml(d.developer || store)}</div>
+      </div>
+      <div class="app-badge">${os} · ${cc}</div>
+    </div>`;
 }
 
 // --- AUTH SCREEN ---
@@ -253,14 +265,12 @@ function setProgress(state) {
   const stage = document.getElementById('stage');
   if (state.status === 'pending') stage.textContent = 'Queued — waiting for a free slot...';
   else if (state.status === 'running')
-    stage.textContent = total
-      ? `Analyzing keyword rankings... ${processed} / ${total}`
-      : 'Fetching app data...';
+    stage.textContent = total ? `${processed} / ${total}` : 'Fetching app data...';
   else if (state.status === 'done') stage.textContent = 'Preparing report...';
   const appBox = document.getElementById('loading-app');
   if (state.appTitle) {
     appBox.innerHTML = appCardHtml(state);
-    appBox.style.display = 'flex';
+    appBox.style.display = 'block';
   }
 }
 
@@ -327,6 +337,27 @@ function handleJobState(state) {
 }
 
 // --- SUMMARY ---
+// Тизер пейволла: строки под блюром + градиент с замком. Реальных ключей до
+// оплаты у нас нет — под блюром плейсхолдеры, подпись говорит правду о числе.
+const TEASER_ROWS = [
+  ['habit tracker', '#3', 68, 72],
+  ['daily planner', '#5', 44, 52],
+  ['streak tracker', '#7', 35, 44],
+  ['routine app', '#9', 29, 31],
+  ['goal tracker', '#12', 27, 35],
+];
+
+function teaserHtml(n) {
+  const rows = TEASER_ROWS.map(([term, rk, vol, diff]) =>
+    `<div class="tz-row"><span>${term}</span><span class="rank-top">${rk}</span><span>${vol}</span><span>${diff}</span></div>`
+  ).join('');
+  return `<div class="tz-blur">${rows}</div>
+    <div class="tz-overlay">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="3" y="7" width="10" height="6.5" rx="1.5" stroke="#8b8f9b" stroke-width="1.4"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" stroke="#8b8f9b" stroke-width="1.4"/></svg>
+      <div class="tz-more">${n} keyword${n === 1 ? '' : 's'} in the full report</div>
+    </div>`;
+}
+
 function renderSummary(state) {
   show('summary');
   document.getElementById('summary-app').innerHTML = appCardHtml(state);
@@ -334,8 +365,13 @@ function renderSummary(state) {
   document.getElementById('m-ranked').textContent = s.rankedKeywords;
   document.getElementById('m-top3').textContent = s.top3;
   document.getElementById('m-top10').textContent = s.top10;
-  document.getElementById('summary-empty').style.display =
-    s.rankedKeywords === 0 ? 'block' : 'none';
+  const empty = s.rankedKeywords === 0;
+  document.getElementById('summary-empty').style.display = empty ? 'block' : 'none';
+  document.getElementById('summary-report').style.display = empty ? 'none' : 'block';
+  if (!empty) {
+    document.getElementById('summary-count').textContent = s.rankedKeywords + ' keywords found';
+    document.getElementById('summary-teaser').innerHTML = teaserHtml(s.rankedKeywords);
+  }
 }
 
 document.getElementById('unlock-btn').addEventListener('click', startCheckout);
@@ -407,7 +443,7 @@ let insightsReq = 0;            // токен против гонки при б�
 const I18N = {
   en: {
     goals: { rank_up: 'Rank up', expand: 'Expand', defend: 'Defend' },
-    download: '⬇ Download Excel', reanalyze: '↻ Re-analyze',
+    download: 'Download Excel', reanalyze: 'Re-analyze', allK: 'All keywords',
     aiOn: 'AI', aiOff: 'rules',
     serpLoading: 'Loading results…', serpError: "Couldn't load results.", serpTop: 'Top results for',
     tbl: { keyword: 'Keyword', rank: 'Rank', demand: 'Volume', diff: 'Diff' },
@@ -424,12 +460,20 @@ const I18N = {
       demand: 'Volume', difficulty: 'Difficulty', position: 'Position', top: 'Top apps',
       checking: 'Checking…', error: "Couldn't check this keyword.",
       empty: 'No apps found.', deflt: 'default · open a store page to change',
-      locked: 'Keyword check is a premium feature.<br/>Unlock any app report to enable it.',
+      locked: '<b>Keyword check is a Pro feature</b>Subscribe from any app report to enable it.',
+    },
+    trk: {
+      cap: 'Tracked apps', note: 'checked every 3h',
+      track: 'Track', tracking: 'Tracking ✓', untrack: 'Stop tracking',
+      empty: 'No tracked apps yet.\nOpen any report and press “Track”.',
+      loading: 'Loading…', error: "Couldn't load tracking.",
+      kwHead: 'keywords', noChanges: 'no significant moves in 24h',
+      locked: '<b>Tracking is a Pro feature</b>Subscribe from any app report to enable it.',
     },
   },
   ru: {
     goals: { rank_up: 'Рост', expand: 'Охват', defend: 'Защита' },
-    download: '⬇ Скачать Excel', reanalyze: '↻ Пересчитать',
+    download: 'Скачать Excel', reanalyze: 'Пересчитать', allK: 'Все ключи',
     aiOn: 'AI', aiOff: 'правила',
     serpLoading: 'Загружаю выдачу…', serpError: 'Не удалось загрузить выдачу.', serpTop: 'Топ выдачи по',
     tbl: { keyword: 'Ключ', rank: 'Поз.', demand: 'Объём', diff: 'Слож.' },
@@ -446,7 +490,15 @@ const I18N = {
       demand: 'Объём', difficulty: 'Сложность', position: 'Позиция', top: 'Топ приложений',
       checking: 'Проверяю…', error: 'Не удалось проверить ключ.',
       empty: 'Приложения не найдены.', deflt: 'по умолчанию · откройте страницу стора',
-      locked: 'Проверка ключа — премиум-функция.<br/>Откройте любой оплаченный отчёт, чтобы включить.',
+      locked: '<b>Проверка ключа — функция Pro</b>Оформите подписку с любого отчёта, чтобы включить.',
+    },
+    trk: {
+      cap: 'Отслеживаемые', note: 'замер каждые 3ч',
+      track: 'Отслеживать', tracking: 'Отслеживается ✓', untrack: 'Не отслеживать',
+      empty: 'Пока нет отслеживаемых приложений.\nОткройте любой отчёт и нажмите «Отслеживать».',
+      loading: 'Загрузка…', error: 'Не удалось загрузить трекинг.',
+      kwHead: 'ключей', noChanges: 'без значимых движений за 24ч',
+      locked: '<b>Трекинг — функция Pro</b>Оформите подписку с любого отчёта, чтобы включить.',
     },
   },
 };
@@ -488,6 +540,8 @@ function renderUnlocked(state) {
   renderLangUI();
   document.getElementById('ai-insights').innerHTML = '';
   loadInsights();
+  // Кнопка Track: подтягиваем текущий статус отслеживания фоном.
+  refreshTrackState();
 }
 
 function renderKwTable() {
@@ -501,6 +555,9 @@ function renderKwTable() {
   if (unlockedFilter === 'ranked') rows = rows.filter((k) => k.rank != null);
   else if (unlockedFilter === 'top3') rows = rows.filter((k) => k.rank != null && k.rank <= 3);
   else if (unlockedFilter === 'top10') rows = rows.filter((k) => k.rank != null && k.rank <= 10);
+
+  const cnt = document.getElementById('kw-count');
+  if (cnt) cnt.textContent = rows.length || '';
 
   const L = t().tbl;
   if (!rows.length) {
@@ -615,15 +672,19 @@ function renderLangUI() {
   document.querySelectorAll('#lang-seg button').forEach((b) => {
     b.classList.toggle('active', b.dataset.lang === currentLang);
   });
-  // Локализуем кнопки действий под таблицей.
-  const dl = document.getElementById('download-btn');
+  // Локализуем кнопки действий под таблицей (лейблы — в span, иконки не трогаем).
+  const dl = document.getElementById('download-label');
   if (dl) dl.textContent = t().download;
-  const re = document.getElementById('u-reanalyze-btn');
+  const re = document.getElementById('u-reanalyze-label');
   if (re) re.textContent = t().reanalyze;
+  const cap = document.getElementById('kw-list-cap');
+  if (cap) cap.textContent = t().allK;
   // Перерисовать таблицу ключей — её заголовки тоже локализованы.
   if (unlockedKeywords && unlockedKeywords.length) renderKwTable();
   // Подписи экрана проверки ключа.
   renderKwLang();
+  // Кнопка Track тоже локализована.
+  renderTrackBtn();
 }
 
 function moveClass(action, quickWins) {
@@ -696,7 +757,7 @@ function quadCell(cls, title, terms) {
   const chips = shown.map((t) => `<span class="qchip">${escHtml(t)}</span>`).join('')
     + (more > 0 ? `<span class="qmore">+${more}</span>` : '');
   return `<div class="qcell ${cls}${list.length ? '' : ' empty'}">
-    <div class="qh"><span class="qt">${title}</span><span class="qn">${list.length}</span></div>
+    <div class="qh"><span class="qdot"></span><span class="qt">${title}</span><span class="qn">${list.length}</span></div>
     <div class="qchips">${chips || '<span class="qmore">—</span>'}</div>
   </div>`;
 }
@@ -705,7 +766,7 @@ function quadrantHtml(q) {
   if (!q) return '';
   const L = t().quad;
   // Колонки = сложность (слева легче), строки = приоритет действия.
-  return `<div class="quad-cap"><span>${t().quadCap}</span><span class="sub">${t().quadAxis}</span></div>
+  return `<div class="sec-head"><span class="sec-lbl">${t().quadCap}</span><span class="sec-sub">${t().quadAxis}</span></div>
     <div class="quad">
       ${quadCell('qw', L.quickWins, q.quickWins)}
       ${quadCell('long', L.longShots, q.longShots)}
@@ -741,7 +802,7 @@ function renderInsights(data) {
   const aiLabel = model && model !== 'rule-based' ? t().aiOn : t().aiOff;
   const dq = [dqKey ? (t().dq[dqKey] || dqKey + ' data') : '', aiLabel].filter(Boolean).join(' · ');
   box.innerHTML = `
-    <div class="ai-summary"><span class="ic">✦</span><div>${escHtml(data.summary)}</div></div>
+    <div class="ai-summary">${escHtml(data.summary)}</div>
     ${quadrantHtml(data.quadrant)}
     <div class="plan-head"><span class="lbl">${t().plan}</span><span class="dq">${dq}</span></div>
     <div class="plan">${rows}</div>`;
@@ -780,6 +841,7 @@ async function downloadExcel() {
 tabbarEl.querySelectorAll('button').forEach((b) => {
   b.addEventListener('click', () => {
     if (b.dataset.tab === 'keyword') openKeywordTab();
+    else if (b.dataset.tab === 'tracking') openTrackingTab();
     else openAppTab();
   });
 });
@@ -858,20 +920,20 @@ function renderKeyword(d) {
   const k = t().kw;
   const vol = (d.volume && d.volume.score) || 0;
   const diff = (d.difficulty && d.difficulty.score) || 0;
-  // Плитка позиции — только если открыта страница приложения (есть appId).
+  // Ячейка позиции — только если открыта страница приложения (есть appId).
   const hasTarget = !!kwContext.appId;
-  const rankVal = d.rank != null ? String(d.rank) : '—';
-  const tiles = hasTarget
-    ? `<div class="mgrid">
-        <div class="mtile"><div class="mv">${vol}</div><div class="ml">${k.demand}</div></div>
-        <div class="mtile"><div class="mv">${diff}</div><div class="ml">${k.difficulty}</div></div>
-        <div class="mtile"><div class="mv">${rankVal}</div><div class="ml">${k.position}</div></div>
-      </div>`
-    : `<div class="mgrid2">
-        <div class="mtile"><div class="mv">${vol}</div><div class="ml">${k.demand}</div></div>
-        <div class="mtile"><div class="mv">${diff}</div><div class="ml">${k.difficulty}</div></div>
-      </div>`;
-  const apps = (d.topApps || []).map((a) => {
+  const rankVal = d.rank != null ? '#' + d.rank : '—';
+  const rankCls = d.rank != null && d.rank <= 10 ? ' green' : '';
+  const diffCls = diff >= 60 ? ' warn' : '';
+  const cells = [
+    `<div class="mcell"><div class="mv">${vol}</div><div class="ml">${k.demand}</div></div>`,
+    `<div class="mcell"><div class="mv${diffCls}">${diff}</div><div class="ml">${k.difficulty}</div></div>`,
+  ];
+  if (hasTarget) {
+    cells.push(`<div class="mcell"><div class="mv${rankCls}">${rankVal}</div><div class="ml">${k.position}</div></div>`);
+  }
+  const list = d.topApps || [];
+  const apps = list.map((a) => {
     const ic = a.icon
       ? `<img class="kw-ic" src="${a.icon}" loading="lazy" onerror="this.style.visibility='hidden'" />`
       : '<span class="kw-ic"></span>';
@@ -883,16 +945,206 @@ function renderKeyword(d) {
       </div>
     </div>`;
   }).join('');
-  box.innerHTML = `${tiles}
-    <div class="serp-head" style="margin-top:12px">${k.top}</div>
-    <div class="serp" style="border:1px solid var(--line);border-radius:12px;max-height:260px">
-      ${apps || `<p class="muted" style="padding:10px;text-align:center">${k.empty}</p>`}
+  box.innerHTML = `
+    <div class="mstrip" style="margin-top:12px;border-top:1px solid var(--line)">${cells.join('')}</div>
+    <div class="sec-head"><span class="sec-lbl">${k.top}</span><span class="sec-sub">${list.length || ''}</span></div>
+    <div class="kw-apps">
+      ${apps || `<p class="muted" style="padding:10px 14px;text-align:center;margin:0">${k.empty}</p>`}
     </div>`;
 }
 
 document.getElementById('kw-check').addEventListener('click', checkKeyword);
 document.getElementById('kw-input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') checkKeyword();
+});
+
+// --- TRACKING TAB ---
+let trackedState = null;   // { id, terms } для текущего приложения отчёта (или null)
+let trkExpanded = null;    // id развёрнутого приложения
+const trkDetails = {};     // id -> { loading?, error?, data? }
+
+// Мини-спарклайн позиций: полилиния в SVG, ось Y инвертирована (1 место сверху).
+// Пропуски (rank=null) рвут линию — честнее, чем рисовать ноль.
+function sparkSvg(series) {
+  const pts = (series || []).slice(-20);
+  const known = pts.filter((r) => r != null);
+  if (known.length < 2) return '<span class="trk-spark"></span>';
+  const min = Math.min(...known);
+  const max = Math.max(...known);
+  const span = Math.max(1, max - min);
+  const W = 64, H = 18, P = 2;
+  const step = pts.length > 1 ? (W - P * 2) / (pts.length - 1) : 0;
+  const segs = [];
+  let cur = [];
+  pts.forEach((r, i) => {
+    if (r == null) { if (cur.length > 1) segs.push(cur); cur = []; return; }
+    const x = P + i * step;
+    const y = P + ((r - min) / span) * (H - P * 2); // меньше rank = выше
+    cur.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+  });
+  if (cur.length > 1) segs.push(cur);
+  if (!segs.length) return '<span class="trk-spark"></span>';
+  const lines = segs.map((s) => `<polyline points="${s.join(' ')}"/>`).join('');
+  return `<svg class="trk-spark" viewBox="0 0 ${W} ${H}">${lines}</svg>`;
+}
+
+async function openTrackingTab() {
+  show('tracking');
+  const L = t().trk;
+  document.getElementById('trk-cap').textContent = L.cap;
+  document.getElementById('trk-note').textContent = L.note;
+  const lockedEl = document.getElementById('trk-locked');
+  const mainEl = document.getElementById('trk-main');
+  const lt = document.getElementById('trk-locked-text');
+  if (lt) lt.innerHTML = L.locked;
+  const locked = !hasPaid;
+  lockedEl.style.display = locked ? 'block' : 'none';
+  mainEl.style.display = locked ? 'none' : 'block';
+  if (locked) return;
+  const list = document.getElementById('trk-list');
+  list.innerHTML = `<div class="ai-loading"><span class="spinner"></span> ${L.loading}</div>`;
+  try {
+    const d = await api('/ext/tracked');
+    renderTrackedList(d.items || []);
+  } catch (e) {
+    if (e.status === 401) { await logout(); return; }
+    if (e.status === 403) { hasPaid = false; openTrackingTab(); return; }
+    list.innerHTML = `<div class="trk-empty">${L.error}</div>`;
+  }
+}
+
+function renderTrackedList(items) {
+  const L = t().trk;
+  const list = document.getElementById('trk-list');
+  if (!items.length) {
+    list.innerHTML = `<div class="trk-empty">${escHtml(L.empty).replace(/\n/g, '<br>')}</div>`;
+    return;
+  }
+  list.innerHTML = items.map((a) => {
+    const flag = FLAGS[a.country] || (a.country || '').toUpperCase();
+    const store = a.platform === 'android' ? 'Google Play' : 'App Store';
+    const badges =
+      (a.up ? `<span class="trk-badge up">▲${a.up}</span>` : '') +
+      (a.down ? `<span class="trk-badge down">▼${a.down}</span>` : '') +
+      (!a.up && !a.down ? `<span class="trk-badge flat">—</span>` : '');
+    const open = trkExpanded === a.id;
+    return `<div class="trk-app" data-id="${a.id}">
+      <div class="trk-head-row" data-id="${a.id}">
+        <div style="flex:1;min-width:0">
+          <div class="trk-t">${escHtml(a.appTitle || a.appId)}</div>
+          <div class="trk-sub">${flag} ${store} · ${a.terms} ${L.kwHead}</div>
+        </div>
+        ${badges}
+      </div>
+      ${open ? `<div class="trk-body">${trkBodyHtml(a.id)}</div>` : ''}
+    </div>`;
+  }).join('');
+  // Клик по шапке — раскрыть/свернуть; по untrack — снять отслеживание.
+  list.querySelectorAll('.trk-head-row').forEach((el) => {
+    el.addEventListener('click', () => toggleTrkApp(Number(el.dataset.id), items));
+  });
+  list.querySelectorAll('.trk-untrack a').forEach((el) => {
+    el.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      const id = Number(el.dataset.id);
+      try { await api('/ext/track/' + id, { method: 'DELETE' }); } catch {}
+      delete trkDetails[id];
+      if (trackedState && trackedState.id === id) trackedState = null;
+      openTrackingTab();
+    });
+  });
+}
+
+function trkBodyHtml(id) {
+  const L = t().trk;
+  const d = trkDetails[id];
+  if (!d || d.loading) return `<div class="ai-loading"><span class="spinner"></span> ${L.loading}</div>`;
+  if (d.error) return `<div class="trk-empty">${L.error}</div>`;
+  const kws = (d.data.keywords || []);
+  const anySig = kws.some((k) => k.significant);
+  const rows = kws.map((k) => {
+    const rk = k.currRank != null ? '#' + k.currRank : '—';
+    let dl = '·', cls = 'flat';
+    if (k.delta != null && k.delta > 0) { dl = '▲' + k.delta; cls = 'up'; }
+    else if (k.delta != null && k.delta < 0) { dl = '▼' + Math.abs(k.delta); cls = 'down'; }
+    else if (k.enteredTop10) { dl = '▲10'; cls = 'up'; }
+    else if (k.leftTop10) { dl = '▼10'; cls = 'down'; }
+    return `<div class="trk-kw">
+      <span class="term">${escHtml(k.term)}</span>
+      ${sparkSvg(k.series)}
+      <span class="rk ${k.currRank != null && k.currRank <= 10 ? 'rank-top' : ''}">${rk}</span>
+      <span class="dl ${cls}">${dl}</span>
+    </div>`;
+  }).join('');
+  const note = anySig ? '' : `<div class="trk-empty" style="padding:8px">${L.noChanges}</div>`;
+  return note + rows + `<div class="trk-untrack"><a data-id="${id}">${L.untrack}</a></div>`;
+}
+
+async function toggleTrkApp(id, items) {
+  trkExpanded = trkExpanded === id ? null : id;
+  renderTrackedList(items);
+  if (trkExpanded === id && !trkDetails[id]) {
+    trkDetails[id] = { loading: true };
+    try {
+      const data = await api('/ext/tracked/' + id);
+      trkDetails[id] = { data };
+    } catch (e) {
+      if (e.status === 401) { await logout(); return; }
+      trkDetails[id] = { error: true };
+    }
+    if (trkExpanded === id) renderTrackedList(items);
+  }
+}
+
+// --- Кнопка Track в отчёте ---
+const trackBtnEl = document.getElementById('track-btn');
+const trackLabelEl = document.getElementById('track-label');
+
+function renderTrackBtn() {
+  if (!trackLabelEl) return;
+  const L = t().trk;
+  trackLabelEl.textContent = trackedState ? L.tracking : L.track;
+}
+
+async function refreshTrackState() {
+  trackedState = null;
+  renderTrackBtn();
+  try {
+    const q = 'platform=' + currentApp.platform
+      + '&appId=' + encodeURIComponent(currentApp.appId)
+      + '&country=' + encodeURIComponent(currentApp.country);
+    const d = await api('/ext/track/status?' + q);
+    trackedState = d.tracked || null;
+  } catch {}
+  renderTrackBtn();
+}
+
+if (trackBtnEl) trackBtnEl.addEventListener('click', async () => {
+  trackBtnEl.disabled = true;
+  try {
+    if (trackedState) {
+      const id = trackedState.id;
+      await api('/ext/track/' + id, { method: 'DELETE' });
+      delete trkDetails[id];
+      trackedState = null;
+    } else {
+      const d = await api('/ext/track', {
+        method: 'POST',
+        body: JSON.stringify({
+          platform: currentApp.platform,
+          appId: currentApp.appId,
+          country: currentApp.country,
+        }),
+      });
+      trackedState = d.tracked || null;
+      logEvent('app_tracked', { appId: currentApp.appId, platform: currentApp.platform });
+    }
+  } catch (e) {
+    if (e.status === 401) { await logout(); return; }
+  } finally {
+    trackBtnEl.disabled = false;
+    renderTrackBtn();
+  }
 });
 
 // --- ERROR ---
