@@ -750,11 +750,17 @@ async function loadInsights() {
   }
 }
 
+// Клик по ключу ведёт на платформу Promobile — ключ и источник в query.
+function promobileUrl(term) {
+  return 'https://www.promobile.app/?utm_source=rankradar&utm_medium=extension&keyword='
+    + encodeURIComponent(term);
+}
+
 function quadCell(cls, title, terms) {
   const list = terms || [];
   const shown = list.slice(0, 5);
   const more = list.length - shown.length;
-  const chips = shown.map((t) => `<span class="qchip">${escHtml(t)}</span>`).join('')
+  const chips = shown.map((t) => `<span class="qchip" data-kw="${escAttr(t)}">${escHtml(t)}</span>`).join('')
     + (more > 0 ? `<span class="qmore">+${more}</span>` : '');
   return `<div class="qcell ${cls}${list.length ? '' : ' empty'}">
     <div class="qh"><span class="qdot"></span><span class="qt">${title}</span><span class="qn">${list.length}</span></div>
@@ -789,7 +795,7 @@ function renderInsights(data) {
       <div class="pr">${a.priority}</div>
       <div class="body">
         <div class="top">
-          <span class="term">${escHtml(a.term)}</span>
+          <span class="term" data-kw="${escAttr(a.term)}">${escHtml(a.term)}</span>
           <span class="badge ${cls}">${moveLabel(cls)}</span>
           <span class="rk ${rkTop ? 'rank-top' : ''}">${rk}</span>
         </div>
@@ -806,6 +812,10 @@ function renderInsights(data) {
     ${quadrantHtml(data.quadrant)}
     <div class="plan-head"><span class="lbl">${t().plan}</span><span class="dq">${dq}</span></div>
     <div class="plan">${rows}</div>`;
+  // Ключи (план + квадрант) кликабельны — ведут на платформу Promobile.
+  box.querySelectorAll('[data-kw]').forEach((el) => {
+    el.addEventListener('click', () => openTab(promobileUrl(el.dataset.kw)));
+  });
   logEvent('insights_viewed', {
     jobId: currentJobId,
     goal: currentGoal,
