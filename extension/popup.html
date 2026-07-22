@@ -315,7 +315,9 @@
       font-size: 10px; padding: 2px 6px; border-radius: 5px;
       background: var(--inset); border: 1px solid var(--line-2); color: var(--ink-2);
       max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      cursor: pointer;
     }
+    .qchip:hover { border-color: var(--accent); color: var(--accent-text); }
     .qmore { font-size: 10px; color: var(--faint); padding: 2px; }
     .qcell.qw .qdot { background: var(--green); }       .qcell.qw .qt { color: var(--green); }
     .qcell.push .qdot { background: var(--accent); }    .qcell.push .qt { color: var(--accent-text); }
@@ -334,7 +336,8 @@
     }
     .act .body { flex: 1; min-width: 0; }
     .act .top { display: flex; align-items: center; gap: 7px; }
-    .act .term { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .act .term { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+    .act .term:hover { color: var(--accent-text); text-decoration: underline; text-underline-offset: 2px; }
     .act .rk { margin-left: auto; color: var(--muted); font-size: 11px; flex: none; font-variant-numeric: tabular-nums; }
     .act .rk.rank-top { color: var(--green); font-weight: 600; }
     .act .why { color: var(--muted); font-size: 11px; line-height: 1.45; margin-top: 2px; }
