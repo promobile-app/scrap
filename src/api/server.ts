@@ -8,7 +8,8 @@ import { config } from '../config.js';
 import { query } from '../db/pool.js';
 import { appLookup, searchApps, getRank, lookupApps } from '../scrapers/appstore.js';
 import { nativeSearchIds, storeLanguages } from '../scrapers/native.js';
-import { gpSearch, gpAppLookup, gpTopChart } from '../scrapers/googleplay.js';
+import { gpSearch, gpAppLookup, gpTopChart, langOf } from '../scrapers/googleplay.js';
+import { gpRpcSearch } from '../scrapers/gplayRpc.js';
 import { gpEstimateVolume } from '../analytics/googleplay/volume.js';
 import { gpEstimateDifficulty } from '../analytics/googleplay/difficulty.js';
 import { topChart } from '../scrapers/charts.js';
@@ -111,21 +112,36 @@ app.get<{
     const language = req.query.language;
 
     // --- Google Play ---
+    // Ранг считается по выдаче из batchexecute-RPC витрины (230-250 позиций,
+    // scrapers/gplayRpc.ts), а не по HTML-странице: та отдаёт ~20-30 и делала
+    // rank=null почти для всех неочевидных ключей. gpSearch остаётся ради
+    // названий приложений для topApps (RPC отдаёт только имена пакетов) и как
+    // запасной источник ранга, если RPC недоступен.
     if (req.query.platform === 'android') {
       const gpId = req.params.id;
-      const [gApp, gpResults, gVolume, gDifficulty] = await Promise.all([
+      const [gApp, gpResults, gRpc, gVolume, gDifficulty] = await Promise.all([
         gpAppLookup(gpId, country),
-        gpSearch(term, country, 250),
+        gpSearch(term, country, 30),
+        gpRpcSearch(term, country, { language: langOf(country), maxPages: 15 }).catch((e: unknown) => {
+          console.warn(`[gp/rank] RPC недоступен, откат на HTML-выдачу: ${e instanceof Error ? e.message : e}`);
+          return null;
+        }),
         gpEstimateVolume(term, country),
         gpEstimateDifficulty(term, country),
       ]);
       if (!gApp) return reply.code(404).send({ error: 'app not found' });
-      const gIdx = gpResults.findIndex((a) => a.appId === gpId);
+
+      const rpcNames = gRpc?.packageNames ?? [];
+      const rankSource = rpcNames.length > 0 ? 'rpc' : 'html';
+      const ranked = rpcNames.length > 0 ? rpcNames : gpResults.map((a) => a.appId);
+      const gIdx = ranked.indexOf(gpId);
       const gRank = gIdx === -1 ? null : gIdx + 1;
+      const titleOf = new Map(gpResults.map((a) => [a.appId, a.title]));
+
       await saveMetricCheck({
         platform: 'android', appId: gpId, appTitle: gApp.title,
         term: term.toLowerCase().trim(), country, language: null,
-        rank: gRank, totalResults: gpResults.length,
+        rank: gRank, totalResults: ranked.length,
         volume: gVolume.score, difficulty: gDifficulty.score,
       }).catch(() => {});
       return {
@@ -135,14 +151,17 @@ app.get<{
         platform: 'android',
         rank: gRank,
         inTop10: gIdx !== -1 && gIdx < 10,
-        totalResults: gpResults.length,
+        totalResults: ranked.length,
+        // Источник ранга: 'rpc' — глубина ~250, 'html' — деградация до ~20-30.
+        // Клиент по нему отличает «нет в выдаче» от «не смотрели так глубоко».
+        rankSource,
         volume: gVolume,
         difficulty: { score: gDifficulty.score, competitors: gDifficulty.competitors },
-        topApps: gpResults.slice(0, 10).map((a, i) => ({
+        topApps: ranked.slice(0, 10).map((appId, i) => ({
           position: i + 1,
-          appId: a.appId,
-          title: a.title,
-          isTarget: a.appId === gpId,
+          appId,
+          title: titleOf.get(appId) ?? '',
+          isTarget: appId === gpId,
         })),
       };
     }
