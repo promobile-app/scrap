@@ -8,3 +8,6 @@ dist/
 private-key.pem
 public-key.pem
 .asa-session*
+
+# Finsky — gsfId и токены аккаунта Google, по сути учётка
+.finsky-state*

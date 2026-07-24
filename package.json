@@ -4,7 +4,7 @@
   "description": "ASO analytics service for Apple App Store (FoxData-like)",
   "type": "module",
   "scripts": {
-    "build": "tsc && cp src/db/schema.sql dist/db/schema.sql",
+    "build": "tsc && cp src/db/schema.sql dist/db/schema.sql && mkdir -p dist/scrapers/finsky/proto dist/scrapers/finsky/devices && cp src/scrapers/finsky/proto/*.proto dist/scrapers/finsky/proto/ && cp src/scrapers/finsky/devices/*.properties dist/scrapers/finsky/devices/",
     "dev": "tsx watch src/api/server.ts",
     "start": "node dist/db/migrate.js && node dist/api/server.js",
     "scrape": "tsx src/cli.ts",
@@ -26,6 +26,7 @@
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.13.1",
     "playwright": "^1.60.0",
+    "protobufjs": "^8.7.1",
     "undici": "^7.2.0"
   },
   "devDependencies": {
