@@ -41,7 +41,10 @@ const STOREFRONTS: Record<string, Storefront> = {
   it: { id: 143450, langs: { it: 7, en: 2 } },
   ca: { id: 143455, langs: { en: 6, fr: 3 } },
   // Остальные витрины — только storefront-id (язык по умолчанию). Все id
-  // эмпирически проверены на нативном endpoint (HTTP 200 + непустая выдача).
+  // эмпирически проверены на нативном endpoint: выдача по общему терму
+  // сверялась с iTunes Search API той же страны (пересечение top-30 заметно
+  // выше, чем с выдачей US) — то есть id действительно принадлежит стране,
+  // а не отдаёт молча американскую витрину.
   au: { id: 143460 }, nl: { id: 143452 }, se: { id: 143456 }, no: { id: 143457 },
   dk: { id: 143458 }, fi: { id: 143447 }, ie: { id: 143449 }, at: { id: 143445 },
   be: { id: 143446 }, ch: { id: 143459 }, pt: { id: 143453 }, gr: { id: 143448 },
@@ -53,6 +56,41 @@ const STOREFRONTS: Record<string, Storefront> = {
   ph: { id: 143474 }, vn: { id: 143471 }, in: { id: 143467 }, ae: { id: 143481 },
   sa: { id: 143479 }, il: { id: 143491 }, eg: { id: 143516 }, za: { id: 143472 },
   ng: { id: 143561 }, af: { id: 143610 }, pk: { id: 143477 }, nz: { id: 143461 },
+  // СНГ / Кавказ / Центральная Азия — без них ранги по этим гео считались
+  // по витрине US (fallback ниже) и почти всегда выходили null.
+  uz: { id: 143566 }, kz: { id: 143517 }, by: { id: 143565 }, az: { id: 143568 },
+  ge: { id: 143615 }, am: { id: 143524 }, kg: { id: 143586 }, tj: { id: 143603 },
+  tm: { id: 143604 }, md: { id: 143523 }, mn: { id: 143592 },
+  // Европа
+  lu: { id: 143451 }, ee: { id: 143518 }, lv: { id: 143519 }, lt: { id: 143520 },
+  mt: { id: 143521 }, bg: { id: 143526 }, hr: { id: 143494 }, si: { id: 143499 },
+  cy: { id: 143557 }, is: { id: 143558 }, al: { id: 143575 }, mk: { id: 143530 },
+  rs: { id: 143500 }, ba: { id: 143612 },
+  // Ближний Восток / Северная Африка
+  kw: { id: 143493 }, qa: { id: 143498 }, bh: { id: 143559 }, om: { id: 143562 },
+  jo: { id: 143528 }, lb: { id: 143497 }, ye: { id: 143571 }, dz: { id: 143563 },
+  tn: { id: 143536 },
+  // Латинская Америка и Карибы
+  ve: { id: 143502 }, gt: { id: 143504 }, sv: { id: 143506 }, do: { id: 143508 },
+  ec: { id: 143509 }, hn: { id: 143510 }, ni: { id: 143512 }, py: { id: 143513 },
+  uy: { id: 143514 }, bo: { id: 143556 }, cr: { id: 143495 }, pa: { id: 143485 },
+  jm: { id: 143511 }, tt: { id: 143551 }, bb: { id: 143541 }, bs: { id: 143539 },
+  bz: { id: 143555 }, gy: { id: 143553 }, sr: { id: 143554 }, ag: { id: 143540 },
+  ai: { id: 143538 }, bm: { id: 143542 }, vg: { id: 143543 }, ky: { id: 143544 },
+  dm: { id: 143545 }, gd: { id: 143546 }, ms: { id: 143547 }, kn: { id: 143548 },
+  lc: { id: 143549 }, vc: { id: 143550 }, tc: { id: 143552 },
+  // Азия и Океания
+  np: { id: 143484 }, lk: { id: 143486 }, mo: { id: 143515 }, bn: { id: 143560 },
+  bt: { id: 143577 }, kh: { id: 143579 }, la: { id: 143587 }, fj: { id: 143583 },
+  fm: { id: 143591 }, pw: { id: 143595 }, pg: { id: 143597 }, sb: { id: 143601 },
+  // Африка
+  ke: { id: 143529 }, gh: { id: 143573 }, tz: { id: 143572 }, ug: { id: 143537 },
+  bw: { id: 143525 }, mg: { id: 143531 }, ml: { id: 143532 }, mu: { id: 143533 },
+  ne: { id: 143534 }, sn: { id: 143535 }, ao: { id: 143564 }, bj: { id: 143576 },
+  bf: { id: 143578 }, cv: { id: 143580 }, td: { id: 143581 }, cg: { id: 143582 },
+  gm: { id: 143584 }, gw: { id: 143585 }, lr: { id: 143588 }, mw: { id: 143589 },
+  mr: { id: 143590 }, mz: { id: 143593 }, na: { id: 143594 }, st: { id: 143598 },
+  sc: { id: 143599 }, sl: { id: 143600 }, sz: { id: 143602 }, zw: { id: 143605 },
 };
 
 export const SUPPORTED_COUNTRIES = Object.keys(STOREFRONTS);
@@ -138,7 +176,16 @@ function releaseChannel(ch: AppleChannel): void {
  * `<id>,29` (язык витрины по умолчанию), который endpoint принимает для всех стран.
  */
 export function storeFront(country: string, language?: string): string {
-  const sf = STOREFRONTS[country.toLowerCase()] ?? STOREFRONTS.us!;
+  const known = STOREFRONTS[country.toLowerCase()];
+  // Витрины нет в карте — берём US, но громко предупреждаем: молчаливый
+  // откат отдаёт американскую выдачу под видом запрошенного гео, и ранг по
+  // локальному приложению выходит null (см. UZ до добавления 143566).
+  if (!known) {
+    console.warn(
+      `[native] storefront для country=${country} неизвестен — выдача будет по витрине US, ранги для локальных приложений будут неверными`,
+    );
+  }
+  const sf = known ?? STOREFRONTS.us!;
   const langId = language ? sf.langs?.[language.toLowerCase()] : undefined;
   return langId ? `${sf.id}-${langId},29` : `${sf.id},29`;
 }
