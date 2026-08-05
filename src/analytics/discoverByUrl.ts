@@ -456,20 +456,30 @@ function isCancelled(id: number): boolean {
 /** Обёртка с ограничением параллельности (очередь). */
 async function runJobQueued(
   jobId: number, platform: 'ios' | 'android', appId: string, country: string,
+  regenerate = false,
 ): Promise<void> {
   await acquireSlot();
   try {
     if (isCancelled(jobId)) return;
-    await runJob(jobId, platform, appId, country);
+    await runJob(jobId, platform, appId, country, regenerate);
   } finally {
     cancelledJobs.delete(jobId);
     releaseSlot();
   }
 }
 
-/** Фоновая обработка: набирает кандидатов и считает метрики, обновляя БД. */
+/**
+ * Фоновая обработка: набирает кандидатов и считает метрики, обновляя БД.
+ *
+ * `regenerate` — прогнать генерацию кандидатов заново, даже если словарь
+ * app_candidate_keywords уже заполнен. Без этого словарь навсегда замораживает
+ * набор ключей: любое улучшение генератора не доходит до приложения, которое
+ * хоть раз анализировали (после деплоя новых источников ключей их индексация
+ * оставалась прежней, пока это не пробросили).
+ */
 async function runJob(
   jobId: number, platform: 'ios' | 'android', appId: string, country: string,
+  regenerate = false,
 ): Promise<void> {
   try {
     await updateDiscoveryJob(jobId, { status: 'running' });
@@ -495,7 +505,7 @@ async function runJob(
     // мерил бы все 600+ старых ключей.
     const persisted = (await getAppCandidateKeywords(platform, appId, country)
       .catch(() => [] as string[])).slice(0, MAX_KEYWORDS);
-    const useCached = persisted.length >= SKIP_BFS_THRESHOLD;
+    const useCached = !regenerate && persisted.length >= SKIP_BFS_THRESHOLD;
 
     if (platform === 'android') {
       const app = await gpAppLookup(appId, country);
@@ -589,6 +599,14 @@ async function runJob(
         autocompleteSignals = built.autocompleteSignals;
       }
     }
+    // При перегенерации подмешиваем словарь: в нём могли осесть ключи, которые
+    // новая генерация не воспроизводит (их нашли с других сидов или в прошлой
+    // версии генератора), а терять уже найденное нельзя. Свежие идут первыми —
+    // под потолком MAX_KEYWORDS в замер должны попасть именно они.
+    if (regenerate && persisted.length) {
+      candidates = [...new Set([...candidates, ...persisted])].slice(0, MAX_KEYWORDS);
+    }
+
     // LLM-проход релевантности (если подключён ANTHROPIC_API_KEY): отсекает
     // off-topic запросы, которые делят токен с приложением, но про другой продукт
     // ("channels dvr" для YouTube). Один вызов на список кандидатов, до замеров —
@@ -827,8 +845,10 @@ export async function startDiscoveryJob(
   }
 
   const job = await createDiscoveryJob(jobKey, platform, appId, country);
-  // Ставим в очередь — выполнится, когда освободится слот.
-  void runJobQueued(job.id, platform, appId, country);
+  // Ставим в очередь — выполнится, когда освободится слот. force означает
+  // «пересчитать по-настоящему»: не только перемерить ранки, но и заново
+  // собрать кандидатов, иначе словарь навсегда фиксирует набор ключей.
+  void runJobQueued(job.id, platform, appId, country, force);
   return rowToState(job);
 }
 
