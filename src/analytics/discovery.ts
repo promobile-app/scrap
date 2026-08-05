@@ -3,6 +3,7 @@ import { nativeAppPage, nativeSearchIds } from '../scrapers/native.js';
 import { gpAppLookup, gpSearch, gpSuggest } from '../scrapers/googleplay.js';
 import { STOP_WORDS } from './stopWords.js';
 import { corpusCandidates, feedCorpus, SERP_FRESH_HOURS } from './corpus.js';
+import { capRecheckTerms, deepRecheckEnabled, gpDeepRanks } from './gpDeepRank.js';
 
 export interface DiscoveredKeyword {
   term: string;
@@ -370,6 +371,29 @@ export async function discoverKeywordsGp(
       };
     })
   ).filter((k): k is DiscoveredKeyword => k !== null);
+
+  // Гибрид глубины: HTML-выдача видит ~20-30 позиций, поэтому rank=null при
+  // непустой выдаче значит «возможно глубже», а не «не ранжируется». Самые
+  // перспективные из таких (по спросу) добиваем RPC-замером витрины —
+  // лимиты числа ключей и страниц в gpDeepRank.ts.
+  if (deepRecheckEnabled()) {
+    const unrankedByDemand = keywords
+      .filter((k) => k.rank === null && k.totalResults > 0)
+      .sort((a, b) => b.volumeScore - a.volumeScore);
+    const deep = await gpDeepRanks(
+      appId, country, capRecheckTerms(unrankedByDemand.map((k) => k.term)),
+    );
+    for (const k of keywords) {
+      const d = deep.get(k.term);
+      if (!d) continue;
+      k.rank = d.rank;
+      k.totalResults = d.totalResults;
+      k.saturationScore = saturationFromResults(d.totalResults);
+      // Глубокая выдача полнее — обновляем кэш, чтобы корпусные SERP-хиты
+      // и повторные прогоны видели приложение и за пределами топ-30.
+      cacheSet(`gp|${country}|${k.term.toLowerCase()}`, d.ids);
+    }
+  }
 
   sortDiscovered(keywords);
 
