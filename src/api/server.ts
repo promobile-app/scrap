@@ -7,7 +7,9 @@ import fastifyRateLimit from '@fastify/rate-limit';
 import { config } from '../config.js';
 import { query } from '../db/pool.js';
 import { appLookup, searchApps, getRank, lookupApps } from '../scrapers/appstore.js';
-import { nativeSearchIds, storeLanguages } from '../scrapers/native.js';
+import { nativeSearchIds, storeLanguages, getNativePoolStats } from '../scrapers/native.js';
+import { getHttpPoolStats } from '../scrapers/http.js';
+import { proxyCount, proxyEnabled } from '../scrapers/proxy.js';
 import { gpSearch, gpAppLookup, gpTopChart, langOf } from '../scrapers/googleplay.js';
 import { gpRpcSearch } from '../scrapers/gplayRpc.js';
 import { gpEstimateVolume } from '../analytics/googleplay/volume.js';
@@ -616,11 +618,19 @@ app.get('/health/asa', async () => getAsaSourceStatus());
 // Живая проба Apple-скрейпинга: если ok:false при работающем Google Play —
 // egress-IP забанен Apple (лечится PROXY_URLS или сменой IP/redeploy).
 app.get('/health/apple', async () => {
+  // pools/proxy отдаём всегда: по ним подбирается APPLE_CHANNELS/HTTP_CHANNELS.
+  // throttled > 0 при растущем requests = упёрлись в лимит Apple, каналы пора
+  // опускать (иначе ошибки осядут в базе как «нет в выдаче»).
+  const pools = () => ({
+    native: getNativePoolStats(),
+    http: getHttpPoolStats(),
+    proxies: { enabled: proxyEnabled(), count: proxyCount() },
+  });
   try {
     const ids = await nativeSearchIds('test', 'us');
-    return { ok: ids.length > 0, results: ids.length };
+    return { ok: ids.length > 0, results: ids.length, pools: pools() };
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    return { ok: false, error: e instanceof Error ? e.message : String(e), pools: pools() };
   }
 });
 

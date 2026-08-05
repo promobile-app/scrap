@@ -49,6 +49,49 @@ function releaseSlot(idx: number): void {
   slots[idx]!.inFlight = Math.max(0, slots[idx]!.inFlight - 1);
 }
 
+// --- Backpressure ----------------------------------------------------------
+// Раньше при 429 тормозила только упавшая задача (sleep в её цикле ретраев),
+// а пул продолжал выдавать слоты с прежней частотой — то есть пул, который
+// сильнее всего разгоняется через HTTP_CHANNELS, не умел притормаживать сам.
+// Теперь 429/5xx сдвигает расписание слота, как bumpPenalty в native.ts:
+// притормаживает и остальные задачи, попавшие на тот же слот.
+const THROTTLE_PENALTY_MS = Number(process.env.HTTP_PENALTY_MS ?? 8000);
+
+function bumpSlotPenalty(idx: number, ms = THROTTLE_PENALTY_MS): void {
+  const s = slots[idx]!;
+  s.nextAt = Math.max(s.nextAt, Date.now() + ms);
+}
+
+// Счётчики для /health/apple: без них подъём HTTP_CHANNELS слепой — троттлинг
+// не виден, а его следствие (position '250+' в базе) выглядит как нормальные данные.
+const counters = { requests: 0, throttled429: 0, serverErrors: 0, failures: 0 };
+
+export function getHttpPoolStats() {
+  return {
+    channels: HTTP_CHANNELS,
+    delayMs: config.scrapeDelayMs,
+    penaltyMs: THROTTLE_PENALTY_MS,
+    inFlight: slots.reduce((n, s) => n + s.inFlight, 0),
+    ...counters,
+  };
+}
+
+/** Общая обработка ответа: считает статусы и штрафует слот при троттлинге. */
+function noteStatus(idx: number, statusCode: number): void {
+  if (statusCode === 429) {
+    counters.throttled429++;
+    bumpSlotPenalty(idx);
+    throw new Error(`HTTP 429`);
+  }
+  if (statusCode >= 500) {
+    counters.serverErrors++;
+    // 5xx у Apple под нагрузкой — тот же сигнал «перебор», но мягче.
+    bumpSlotPenalty(idx, Math.round(THROTTLE_PENALTY_MS / 4));
+    throw new Error(`HTTP ${statusCode}`);
+  }
+  if (statusCode >= 400) throw new Error(`HTTP ${statusCode} (non-retryable)`);
+}
+
 export interface FetchOptions {
   headers?: Record<string, string>;
   query?: Record<string, string | number>;
@@ -66,17 +109,13 @@ export async function fetchJson<T = unknown>(url: string, opts: FetchOptions = {
     const slot = await acquireSlot();
     try {
       const dispatcher = nextDispatcher();
+      counters.requests++;
       const res = await request(fullUrl, {
         method: 'GET',
         headers: { 'User-Agent': pickUserAgent(), Accept: 'application/json', ...opts.headers },
         ...(dispatcher ? { dispatcher } : {}),
       });
-      if (res.statusCode === 429 || res.statusCode >= 500) {
-        throw new Error(`HTTP ${res.statusCode}`);
-      }
-      if (res.statusCode >= 400) {
-        throw new Error(`HTTP ${res.statusCode} (non-retryable)`);
-      }
+      noteStatus(slot, res.statusCode);
       return (await res.body.json()) as T;
     } catch (err) {
       lastErr = err;
@@ -85,6 +124,7 @@ export async function fetchJson<T = unknown>(url: string, opts: FetchOptions = {
       releaseSlot(slot);
     }
   }
+  counters.failures++;
   throw new Error(`fetchJson failed after ${config.scrapeMaxRetries} attempts: ${String(lastErr)}`);
 }
 
@@ -100,13 +140,13 @@ export async function fetchText(url: string, opts: FetchOptions = {}): Promise<s
     const slot = await acquireSlot();
     try {
       const dispatcher = nextDispatcher();
+      counters.requests++;
       const res = await request(fullUrl, {
         method: 'GET',
         headers: { 'User-Agent': pickUserAgent(), ...opts.headers },
         ...(dispatcher ? { dispatcher } : {}),
       });
-      if (res.statusCode === 429 || res.statusCode >= 500) throw new Error(`HTTP ${res.statusCode}`);
-      if (res.statusCode >= 400) throw new Error(`HTTP ${res.statusCode} (non-retryable)`);
+      noteStatus(slot, res.statusCode);
       return await res.body.text();
     } catch (err) {
       lastErr = err;
@@ -115,5 +155,6 @@ export async function fetchText(url: string, opts: FetchOptions = {}): Promise<s
       releaseSlot(slot);
     }
   }
+  counters.failures++;
   throw new Error(`fetchText failed after ${config.scrapeMaxRetries} attempts: ${String(lastErr)}`);
 }

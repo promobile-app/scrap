@@ -169,6 +169,19 @@ function releaseChannel(ch: AppleChannel): void {
   ch.release();
 }
 
+// Счётчики троттлинга для /health/apple — по ним видно, упёрся ли текущий
+// APPLE_CHANNELS в лимит Apple, до того как это выльется в rank=null в базе.
+const nativeCounters = { requests: 0, throttled: 0, failures: 0 };
+
+export function getNativePoolStats() {
+  return {
+    channels: CHANNEL_COUNT,
+    delayMs: config.scrapeDelayMs,
+    inFlight: CHANNELS.reduce((n, c) => n + c.inFlight, 0),
+    ...nativeCounters,
+  };
+}
+
 /** Собирает значение X-Apple-Store-Front для страны и (опц.) языка витрины. */
 /**
  * Строка заголовка X-Apple-Store-Front для страны/языка (без суффикса t:native).
@@ -225,6 +238,7 @@ export async function nativeSearchIds(
 
       // Один прокси на весь запрос (включая редирект-хопы) — round-robin по пулу.
       const dispatcher = nextDispatcher();
+      nativeCounters.requests++;
       const reqOpts = dispatcher ? { method: 'GET' as const, headers, dispatcher } : { method: 'GET' as const, headers };
       // MZSearch отвечает 302 на MZStore — следуем за редиректом вручную.
       let target: string | URL = url;
@@ -247,11 +261,15 @@ export async function nativeSearchIds(
       // При 429/403 (ограничение Apple) — увеличенная пауза на этом канале,
       // чтобы притормозить и остальные worker'ы на нём.
       const throttled = /HTTP (429|403)/.test(String(err));
-      if (throttled) channel.bumpPenalty();
+      if (throttled) {
+        nativeCounters.throttled++;
+        channel.bumpPenalty();
+      }
       await sleep((throttled ? 4000 : 500) * 2 ** attempt + Math.random() * 400);
     } finally {
       releaseChannel(channel);
     }
   }
+  nativeCounters.failures++;
   throw new Error(`nativeSearchIds failed: ${String(lastErr)}`);
 }

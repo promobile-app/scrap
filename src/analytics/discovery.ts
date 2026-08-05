@@ -99,9 +99,42 @@ function cacheSet(key: string, value: string[]): void {
 type SuggestFn = (term: string, country: string) => Promise<string[]>;
 
 /**
+ * Частотные слова и биграммы из описания приложения — самый богатый
+ * источник кандидатов для индексации: разработчик сам перечисляет там,
+ * по каким запросам хочет находиться.
+ */
+function descriptionTerms(description: string): { words: string[]; bigrams: string[] } {
+  const tokens = words(description);
+  if (!tokens.length) return { words: [], bigrams: [] };
+
+  const wordFreq = new Map<string, number>();
+  for (const t of tokens) wordFreq.set(t, (wordFreq.get(t) ?? 0) + 1);
+
+  const bigramFreq = new Map<string, number>();
+  for (let i = 0; i < tokens.length - 1; i++) {
+    const b = `${tokens[i]} ${tokens[i + 1]}`;
+    bigramFreq.set(b, (bigramFreq.get(b) ?? 0) + 1);
+  }
+
+  const topWords = [...wordFreq.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 20)
+    .map(([w]) => w);
+  // Биграммы, встречающиеся хотя бы дважды, — разовые сочетания почти
+  // всегда шум связного текста, а не ключевая фраза.
+  const topBigrams = [...bigramFreq.entries()]
+    .filter(([, n]) => n >= 2)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 15)
+    .map(([b]) => b);
+
+  return { words: topWords, bigrams: topBigrams };
+}
+
+/**
  * Генерация кандидатов ключевых слов для приложения.
- * Источники: название, жанр, autocomplete-расширения сид-слов,
- * ключи из названий приложений-соседей по выдаче.
+ * Источники: название, жанр, описание (частотные слова и биграммы),
+ * autocomplete-расширения сид-слов и вторая волна подсказок по лучшим хинтам.
  * Платформо-независимо: autocomplete-источник передаётся параметром
  * (Apple Search Hints для iOS, gplay.suggest для Android).
  */
@@ -110,10 +143,18 @@ async function buildCandidatesWith(
   title: string,
   genre: string,
   country: string,
+  description = '',
+  maxCandidates = 120,
 ): Promise<{ candidates: string[]; autocompleteSignals: Map<string, number> }> {
-  const seeds = [...new Set([...words(title), ...words(genre)])].slice(0, 6);
+  const titleGenreSeeds = [...new Set([...words(title), ...words(genre)])].slice(0, 10);
+  const desc = descriptionTerms(description);
 
-  const candidates = new Set<string>([...seeds, genre.toLowerCase()]);
+  const candidates = new Set<string>([
+    ...titleGenreSeeds,
+    genre.toLowerCase(),
+    ...desc.words,
+    ...desc.bigrams,
+  ]);
   // Сигнал спроса по термину: позиция в подсказках стора, нормированная в [0..1].
   const autocompleteSignals = new Map<string, number>();
 
@@ -123,22 +164,37 @@ async function buildCandidatesWith(
     candidates.add(`${titleWords[i]} ${titleWords[i + 1]}`);
   }
 
-  // Расширения через autocomplete стора — параллельно (было последовательно).
-  const hintLists = await mapLimit(seeds, 4, (seed) =>
-    suggestFn(seed, country).catch(() => [] as string[]),
-  );
-  for (const hints of hintLists) {
-    const listLen = Math.max(hints.length, 1);
-    hints.slice(0, 5).forEach((h, idx) => {
-      const hl = h.toLowerCase().trim();
-      const sig = 1 - idx / listLen;
-      if (sig > (autocompleteSignals.get(hl) ?? 0)) autocompleteSignals.set(hl, sig);
-      candidates.add(h);
-    });
-  }
+  const collectHints = async (seedList: string[]): Promise<string[]> => {
+    const hintLists = await mapLimit(seedList, 4, (seed) =>
+      suggestFn(seed, country).catch(() => [] as string[]),
+    );
+    const collected: string[] = [];
+    for (const hints of hintLists) {
+      const listLen = Math.max(hints.length, 1);
+      hints.slice(0, 10).forEach((h, idx) => {
+        const hl = h.toLowerCase().trim();
+        const sig = 1 - idx / listLen;
+        if (sig > (autocompleteSignals.get(hl) ?? 0)) autocompleteSignals.set(hl, sig);
+        candidates.add(h);
+        collected.push(hl);
+      });
+    }
+    return collected;
+  };
+
+  // Расширения через autocomplete стора: сиды из названия/жанра + верх описания.
+  const seeds = [...new Set([...titleGenreSeeds, ...desc.words.slice(0, 6)])].slice(0, 14);
+  const firstWave = await collectHints(seeds);
+
+  // Вторая волна: подсказки по лучшим хинтам первой волны — так достаются
+  // длиннохвостые фразы, которых нет ни в названии, ни в описании.
+  const secondWaveSeeds = [...new Set(firstWave)]
+    .filter((h) => !seeds.includes(h))
+    .slice(0, 10);
+  await collectHints(secondWaveSeeds);
 
   return {
-    candidates: [...candidates].filter((c) => c.length >= 3).slice(0, 30),
+    candidates: [...candidates].filter((c) => c.length >= 3).slice(0, maxCandidates),
     autocompleteSignals,
   };
 }
@@ -147,8 +203,9 @@ async function buildCandidates(
   title: string,
   genre: string,
   country: string,
+  description = '',
 ): Promise<{ candidates: string[]; autocompleteSignals: Map<string, number> }> {
-  return buildCandidatesWith(suggest, title, genre, country);
+  return buildCandidatesWith(suggest, title, genre, country, description);
 }
 
 /** Сортировка выдачи discovery: сначала где приложение в топе, затем по спросу. */
@@ -175,7 +232,7 @@ export async function discoverKeywords(
   if (!app) throw new Error('Приложение не найдено в этом гео');
 
   const { candidates, autocompleteSignals } = await buildCandidates(
-    app.title, app.primaryGenre, country,
+    app.title, app.primaryGenre, country, app.description,
   );
 
   // Параллельный сбор ранков: ×6-8 быстрее чем for-await.
@@ -223,8 +280,15 @@ export async function discoverKeywordsGp(
   const app = await gpAppLookup(appId, country);
   if (!app) throw new Error('Приложение не найдено в этом гео');
 
+  // Кандидатов меньше, чем на iOS: каждая проверка — это gpSearch, а Google
+  // при высокой частоте отдаёт капчу.
   const { candidates, autocompleteSignals } = await buildCandidatesWith(
-    gpSuggest, app.title, app.genre, country,
+    gpSuggest,
+    app.title,
+    app.genre,
+    country,
+    `${app.summary} ${app.description}`,
+    60,
   );
 
   const keywords: DiscoveredKeyword[] = (
