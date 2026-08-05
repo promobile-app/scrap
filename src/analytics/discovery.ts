@@ -98,6 +98,19 @@ function cacheSet(key: string, value: string[]): void {
 
 type SuggestFn = (term: string, country: string) => Promise<string[]>;
 
+// Потолок кандидатов на приложение. Каждый кандидат — отдельный поиск в сторе,
+// поэтому это главный регулятор «полнота индексации против времени ответа».
+// Android ниже: там проверка — это gpSearch, а Google быстрее отдаёт капчу.
+const IOS_MAX_CANDIDATES = Number(process.env.DISCOVERY_MAX_CANDIDATES ?? 300);
+const GP_MAX_CANDIDATES = Number(process.env.DISCOVERY_MAX_CANDIDATES_GP ?? 120);
+
+// Ширина генерации: сколько подсказок берём с каждого сида и сколько сидов
+// уходит во вторую волну. Поднимать вместе с потолком — иначе кандидатов
+// физически не наберётся столько, сколько разрешает cap.
+const HINTS_PER_SEED = Number(process.env.DISCOVERY_HINTS_PER_SEED ?? 20);
+const SEED_LIMIT = Number(process.env.DISCOVERY_SEED_LIMIT ?? 25);
+const SECOND_WAVE_SEEDS = Number(process.env.DISCOVERY_SECOND_WAVE_SEEDS ?? 20);
+
 /**
  * Частотные слова и биграммы из описания приложения — самый богатый
  * источник кандидатов для индексации: разработчик сам перечисляет там,
@@ -144,7 +157,7 @@ async function buildCandidatesWith(
   genre: string,
   country: string,
   description = '',
-  maxCandidates = 120,
+  maxCandidates = IOS_MAX_CANDIDATES,
 ): Promise<{ candidates: string[]; autocompleteSignals: Map<string, number> }> {
   const titleGenreSeeds = [...new Set([...words(title), ...words(genre)])].slice(0, 10);
   const desc = descriptionTerms(description);
@@ -171,7 +184,7 @@ async function buildCandidatesWith(
     const collected: string[] = [];
     for (const hints of hintLists) {
       const listLen = Math.max(hints.length, 1);
-      hints.slice(0, 10).forEach((h, idx) => {
+      hints.slice(0, HINTS_PER_SEED).forEach((h, idx) => {
         const hl = h.toLowerCase().trim();
         const sig = 1 - idx / listLen;
         if (sig > (autocompleteSignals.get(hl) ?? 0)) autocompleteSignals.set(hl, sig);
@@ -183,14 +196,14 @@ async function buildCandidatesWith(
   };
 
   // Расширения через autocomplete стора: сиды из названия/жанра + верх описания.
-  const seeds = [...new Set([...titleGenreSeeds, ...desc.words.slice(0, 6)])].slice(0, 14);
+  const seeds = [...new Set([...titleGenreSeeds, ...desc.words.slice(0, 6)])].slice(0, SEED_LIMIT);
   const firstWave = await collectHints(seeds);
 
   // Вторая волна: подсказки по лучшим хинтам первой волны — так достаются
   // длиннохвостые фразы, которых нет ни в названии, ни в описании.
   const secondWaveSeeds = [...new Set(firstWave)]
     .filter((h) => !seeds.includes(h))
-    .slice(0, 10);
+    .slice(0, SECOND_WAVE_SEEDS);
   await collectHints(secondWaveSeeds);
 
   return {
@@ -288,7 +301,7 @@ export async function discoverKeywordsGp(
     app.genre,
     country,
     `${app.summary} ${app.description}`,
-    60,
+    GP_MAX_CANDIDATES,
   );
 
   const keywords: DiscoveredKeyword[] = (
