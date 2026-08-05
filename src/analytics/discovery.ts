@@ -1,6 +1,7 @@
 import { appLookup, suggest } from '../scrapers/appstore.js';
-import { nativeSearchIds } from '../scrapers/native.js';
+import { nativeAppPage, nativeSearchIds } from '../scrapers/native.js';
 import { gpAppLookup, gpSearch, gpSuggest } from '../scrapers/googleplay.js';
+import { STOP_WORDS } from './stopWords.js';
 
 export interface DiscoveredKeyword {
   term: string;
@@ -16,11 +17,6 @@ export interface DiscoveryResult {
   country: string;
   keywords: DiscoveredKeyword[];
 }
-
-const STOP_WORDS = new Set([
-  'the', 'and', 'for', 'app', 'with', 'your', 'free', 'pro', 'plus',
-  'a', 'an', 'to', 'of', 'on', 'in', '&', '-', 'by',
-]);
 
 /**
  * Насыщенность выдачи (5-100) — сигнал ПРЕДЛОЖЕНИЯ (сколько приложений в нише).
@@ -158,13 +154,18 @@ async function buildCandidatesWith(
   country: string,
   description = '',
   maxCandidates = IOS_MAX_CANDIDATES,
+  nicheTerms: string[] = [],
 ): Promise<{ candidates: string[]; autocompleteSignals: Map<string, number> }> {
-  const titleGenreSeeds = [...new Set([...words(title), ...words(genre)])].slice(0, 10);
+  // Жанры на языке витрины: на неанглоязычной витрине они заменяют английские
+  // жанры из iTunes lookup, по которым локальный автокомплит почти пуст.
+  const nicheWords = [...new Set(nicheTerms.flatMap((t) => words(t)))];
+  const titleGenreSeeds = [...new Set([...words(title), ...words(genre), ...nicheWords])].slice(0, 15);
   const desc = descriptionTerms(description);
 
   const candidates = new Set<string>([
     ...titleGenreSeeds,
     genre.toLowerCase(),
+    ...nicheTerms.map((t) => t.toLowerCase().trim()).filter((t) => t.length >= 3),
     ...desc.words,
     ...desc.bigrams,
   ]);
@@ -217,8 +218,9 @@ async function buildCandidates(
   genre: string,
   country: string,
   description = '',
+  nicheTerms: string[] = [],
 ): Promise<{ candidates: string[]; autocompleteSignals: Map<string, number> }> {
-  return buildCandidatesWith(suggest, title, genre, country, description);
+  return buildCandidatesWith(suggest, title, genre, country, description, IOS_MAX_CANDIDATES, nicheTerms);
 }
 
 /** Сортировка выдачи discovery: сначала где приложение в топе, затем по спросу. */
@@ -244,8 +246,12 @@ export async function discoverKeywords(
   const app = await appLookup(appId, country);
   if (!app) throw new Error('Приложение не найдено в этом гео');
 
+  // Жанры на языке витрины: для fr это «Cartes»/«Casino» вместо английских
+  // «Card»/«Casino» из iTunes lookup — на локальной витрине сиды должны быть
+  // на её языке, иначе автокомплит по ним почти пуст.
+  const page = await nativeAppPage(appId, country);
   const { candidates, autocompleteSignals } = await buildCandidates(
-    app.title, app.primaryGenre, country, app.description,
+    app.title, app.primaryGenre, country, app.description, page?.genreNames ?? [],
   );
 
   // Параллельный сбор ранков: ×6-8 быстрее чем for-await.

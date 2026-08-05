@@ -1,10 +1,11 @@
 import { appLookup, lookupApps, lookupAppsCached, suggest } from '../scrapers/appstore.js';
-import { nativeSearchIds } from '../scrapers/native.js';
+import { nativeAppPage, nativeSearchIds } from '../scrapers/native.js';
 import { gpAppLookup, gpSearch, gpSuggest, type GpAppInfo } from '../scrapers/googleplay.js';
 import { isAsaDashConfigured, keywordPopularity } from '../scrapers/asaDashboard.js';
 import { isGoogleAdsConfigured, keywordSearchVolumes } from '../scrapers/googleAds.js';
 import { webSearchesSignal } from './googleplay/volume.js';
 import { logNorm } from './signals.js';
+import { STOP_WORDS } from './stopWords.js';
 import { parseStoreUrl } from '../scrapers/storeUrl.js';
 import {
   createDiscoveryJob, getDiscoveryJob, latestDiscoveryJob, updateDiscoveryJob,
@@ -108,16 +109,6 @@ interface KeywordData {
 }
 const keywordCache = new TtlCache<KeywordData>(CACHE_TTL_MS);
 
-const STOP_WORDS = new Set([
-  'the', 'and', 'for', 'app', 'apps', 'with', 'your', 'free', 'pro', 'plus',
-  'a', 'an', 'to', 'of', 'on', 'in', '&', '-', 'by', 'is', 'it', 'as', 'or',
-  'this', 'that', 'you', 'are', 'our', 'all', 'new', 'get', 'use', 'can',
-  'has', 'have', 'from', 'about', 'also', 'they', 'them', 'their', 'will',
-  'more', 'one', 'two', 'any', 'now', 'best', 'top', 'easy', 'simple',
-  // Технический мусор/обрывки, не являющиеся поисковыми запросами.
-  'com', 'www', 'net', 'org', 'inc', 'ltd', 'llc', 'http', 'https', 'been',
-]);
-
 /**
  * Фильтр качества кандидата: отсекает мусор-фразы, которые люди не ищут.
  * Одиночные слова (≥3 символов, не стоп-слова) — ок. Многословные фразы
@@ -161,6 +152,7 @@ function words(s: string): string[] {
 
 function topWords(s: string, max = 60): string[] {
   const freq = new Map<string, number>();
+  // words() уже отсеял стоп-слова — здесь остаётся только частотность.
   for (const w of words(s)) {
     freq.set(w, (freq.get(w) ?? 0) + 1);
   }
@@ -262,11 +254,14 @@ async function mapLimit<T, R>(
 
 /**
  * Генерация ключей-кандидатов:
- *   1) seeds = слова из title + description + genre + bigrams + competitor titles
+ *   1) seeds = title + description + genre + bigrams + конкуренты (включая
+ *      связанные приложения от Apple) + жанры на языке витрины;
  *   2) BFS расширение через autocomplete — небольшая глубина, чтобы
- *      подсказки не «уплывали» в нерелевантную тематику.
- *   3) фильтр релевантности: оставляем кейворд только если у него есть
- *      пересечение токенов с пулом релевантных слов (title+desc+competitors).
+ *      подсказки не «уплывали» в нерелевантную тематику;
+ *   3) в кандидаты идут ВСЕ подсказки; пересечение токенов с приложением
+ *      решает лишь то, раскручивать ли подсказку дальше. Релевантность
+ *      определяется после замера: ранг доказывает её сам, безранговые
+ *      чистят LLM-проход и coreRelevant.
  */
 async function buildCandidates(
   title: string,
@@ -276,7 +271,8 @@ async function buildCandidates(
   description = '',
   competitorTitles: string[] = [],
   competitorDescriptions: string[] = [],
-): Promise<{ candidates: string[]; relevantTokens: Set<string>; autocompleteSignals: Map<string, number> }> {
+  nicheTerms: string[] = [],
+): Promise<{ candidates: string[]; autocompleteSignals: Map<string, number> }> {
   const suggestFn = platform === 'android' ? gpSuggest : suggest;
   // Сигнал спроса по термину: лучшая (наивысшая) позиция в подсказках Apple,
   // нормированная в [0..1]. Собираем по ходу BFS — это бесплатный сигнал спроса.
@@ -291,21 +287,30 @@ async function buildCandidates(
   // кредитных приложений: мікрозайм, позика, гроші), даже если их нет в НАШЕМ
   // описании. Берём топ-частотные и прогоняем через autocomplete как сиды.
   const compDescWords = topWords(competitorDescriptions.join(' '), 50);
+  // Жанры на языке витрины. Замер на fr показал, что сами по себе они дают
+  // мало (их автокомплит — вся категория, а не ниша), но на неанглоязычных
+  // витринах они ЗАМЕНЯЮТ английские жанры из iTunes lookup, по которым
+  // локальный автокомплит почти пуст. Основную лексику ниши даёт не это,
+  // а описания связанных приложений (compDescWords) — см. relatedIds ниже.
+  const nicheWords = [...new Set(nicheTerms.flatMap((t) => words(t)))];
 
-  // Пул «своих» токенов — по нему фильтруем подсказки из autocomplete,
-  // чтобы не утащить нерелевантные ветки (bank → account → login → ...).
+  // Пул «своих» токенов. Используется ТОЛЬКО для решения, стоит ли раскручивать
+  // подсказку дальше (см. ниже) — на попадание в кандидаты он больше не влияет.
   const relevantTokens = new Set<string>([
     ...titleWords,
     ...descWords,
     ...genreWords,
     ...compWords,
     ...compDescWords,
+    ...nicheWords,
   ]);
 
   const seedSet = new Set<string>([
     ...titleWords,
     ...descWords.slice(0, 40),
     ...genreWords,
+    ...nicheWords,
+    ...nicheTerms.map((t) => t.toLowerCase().trim()),
     ...compWords,
     ...compDescWords.slice(0, 30),
     genre.toLowerCase(),
@@ -344,9 +349,14 @@ async function buildCandidates(
         const sig = 1 - idx / listLen;
         if (sig > (autocompleteSignals.get(hl) ?? 0)) autocompleteSignals.set(hl, sig);
         if (candidates.has(hl)) continue;
-        if (!isRelevant(hl)) continue;
+        // Кандидатом становится ЛЮБАЯ подсказка: ранг сам докажет релевантность
+        // (так не теряются ключи без общих токенов с приложением — "21", "vegas"
+        // для блэкджека), а безранговый мусор снимут LLM-проход и coreRelevant.
         candidates.add(hl);
-        next.push(hl);
+        // А вот РАСКРУЧИВАТЬ дальше имеет смысл только релевантные: расширение
+        // случайной подсказки уводит в чужую тематику ("cartes" → "cartes
+        // vitales" → "carte vitale ameli") и жжёт бюджет замеров впустую.
+        if (isRelevant(hl)) next.push(hl);
         if (candidates.size >= MAX_KEYWORDS) break;
       }
       if (candidates.size >= MAX_KEYWORDS) break;
@@ -365,7 +375,6 @@ async function buildCandidates(
     candidates: [...candidates]
       .filter((c) => c.length >= 3 && isQualityCandidate(c, autocompleteSignals, titleBigramSet))
       .slice(0, MAX_KEYWORDS),
-    relevantTokens,
     autocompleteSignals,
   };
 }
@@ -467,7 +476,6 @@ async function runJob(
 
     let title = appId;
     let candidates: string[];
-    let relevantTokens: Set<string> = new Set();
     // «Ядро» релевантности приложения (название+жанр+топ описания). Считается в
     // ОБОИХ путях (и кэш, и свежий) из метаданных приложения, поэтому фильтр
     // релевантности работает даже когда кандидаты пришли из кэша.
@@ -521,7 +529,6 @@ async function runJob(
           app.title, app.genre, country, 'android', desc, competitorTitles, competitorDescriptions,
         );
         candidates = built.candidates;
-        relevantTokens = built.relevantTokens;
         autocompleteSignals = built.autocompleteSignals;
       }
     } else {
@@ -548,10 +555,20 @@ async function runJob(
           [app.title, ...words(app.title).slice(0, 2), app.primaryGenre]
             .map((s) => s.trim()).filter((s) => s.length >= 3),
         )];
-        const idLists = await mapLimit(compSeeds, 4, (s) =>
-          nativeSearchIds(s, country).catch(() => [] as string[]));
-        const competitorIds = [...new Set(idLists.flat())]
-          .filter((id) => id !== String(appId)).slice(0, 15);
+        // Нишевой контекст от самой Apple: «покупают также» + топ категории и
+        // жанры на языке витрины. Это единственный источник, описывающий НИШУ,
+        // а не приложение, — от названия до этих слов автокомплитом не дойти.
+        // Замер (Blackjack/fr): описания связанных приложений дают лексику
+        // roulette/poker/vegas/craps/jetons, а с ней +14 ранжированных ключей,
+        // которых прежний генератор не мог сгенерировать в принципе.
+        const [idLists, page] = await Promise.all([
+          mapLimit(compSeeds, 4, (s) => nativeSearchIds(s, country).catch(() => [] as string[])),
+          nativeAppPage(appId, country),
+        ]);
+        // Связанные приложения от Apple идут ПЕРВЫМИ: они точнее выдачи по
+        // собственному названию, где полно однофамильцев из других ниш.
+        const competitorIds = [...new Set([...(page?.relatedIds ?? []), ...idLists.flat()])]
+          .filter((id) => id !== String(appId)).slice(0, 20);
         const competitors = competitorIds.length
           ? await lookupApps(competitorIds, country).catch(() => [])
           : [];
@@ -566,9 +583,9 @@ async function runJob(
           app.description,
           competitorTitles,
           competitorDescriptions,
+          page?.genreNames ?? [],
         );
         candidates = built.candidates;
-        relevantTokens = built.relevantTokens;
         autocompleteSignals = built.autocompleteSignals;
       }
     }
