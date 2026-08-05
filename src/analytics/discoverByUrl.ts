@@ -16,6 +16,7 @@ import {
 } from '../db/repo.js';
 import { llmRelevantTerms, type RelevanceAppContext } from './relevance.js';
 import { corpusCandidates, feedCorpus } from './corpus.js';
+import { capRecheckTerms, deepRecheckEnabled, gpDeepRanks } from './gpDeepRank.js';
 import { notify } from '../notify.js';
 
 // Сколько уже сохранённых кандидатов нужно, чтобы пропустить дорогой BFS-этап
@@ -754,6 +755,34 @@ async function runJob(
           ? 'Google Play не отдал выдачу (вероятно, ограничение запросов с сервера) — позиции не измерены. Попробуйте позже.'
           : 'Магазин ограничил запросы — не удалось получить выдачу. Попробуйте позже.',
       );
+    }
+
+    // Гибрид глубины (только Android): HTML-выдача видит ~20-30 позиций,
+    // поэтому rank=null при непустой выдаче значит «возможно глубже». Самые
+    // перспективные безранговые (по спросу) добиваем RPC-замером витрины;
+    // лимиты числа ключей и страниц — в gpDeepRank.ts. Глубокую выдачу
+    // персистим в keyword_cache: она полнее HTML-снимка и кормит SERP-хиты
+    // накопительного корпуса.
+    if (platform === 'android' && deepRecheckEnabled() && !isCancelled(jobId)) {
+      const unrankedByDemand = found
+        .filter((k) => k.rank === null && k.totalResults > 0)
+        .sort((a, b) => b.volume - a.volume);
+      const deep = await gpDeepRanks(
+        appId, country, capRecheckTerms(unrankedByDemand.map((k) => k.term)),
+      );
+      for (const k of found) {
+        const d = deep.get(k.term);
+        if (!d) continue;
+        k.rank = d.rank;
+        k.totalResults = d.totalResults;
+        k.saturation = saturationFromResults(d.totalResults);
+        const data = {
+          ids: d.ids, totalResults: d.totalResults,
+          volume: k.volume, difficulty: k.difficulty,
+        };
+        keywordCache.set(`android|${country}|${k.term}`, data);
+        upsertCachedKeyword('android', country, k.term, data).catch(() => {});
+      }
     }
 
     // Свежий путь: сигнал+релевантность. Кэш-путь: фильтр сигнала пропускаем
