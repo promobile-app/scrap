@@ -401,3 +401,70 @@ export async function saveAppCandidateKeywords(
     [platform, appId, country, terms],
   );
 }
+
+// --- Накопительный корпус ключей по гео (словарь в стиле FoxData) -------
+
+/** Батч-запись термов в корпус гео. Термы нормализуются к lower/trim. */
+export async function addCorpusTerms(
+  platform: string, country: string, terms: string[], source = 'discovery',
+): Promise<void> {
+  const clean = [...new Set(
+    terms.map((t) => t.toLowerCase().trim()).filter((t) => t.length >= 3 && t.length <= 60),
+  )];
+  if (clean.length === 0) return;
+  await query(
+    `INSERT INTO keyword_corpus (platform, country, term, source)
+     SELECT $1, $2, t, $4
+     FROM UNNEST($3::text[]) AS t
+     ON CONFLICT (platform, country, term)
+     DO UPDATE SET last_seen_at = now()`,
+    [platform, country, clean, source],
+  );
+}
+
+/**
+ * Термы корпуса гео, пересекающиеся хотя бы одним токеном с лексикой
+ * приложения (название/жанр/описание/ниша). Это «проверябельная» часть
+ * корпуса для чужого приложения: полный корпус мерить бессмысленно и дорого.
+ */
+export async function corpusTermsMatching(
+  platform: string, country: string, tokens: string[], limit: number,
+): Promise<string[]> {
+  if (tokens.length === 0 || limit <= 0) return [];
+  const rows = await query<{ term: string }>(
+    `SELECT term FROM keyword_corpus
+     WHERE platform = $1 AND country = $2
+       AND string_to_array(term, ' ') && $3::text[]
+     ORDER BY last_seen_at DESC
+     LIMIT $4`,
+    [platform, country, tokens, limit],
+  );
+  return rows.map((r) => r.term);
+}
+
+export interface SerpHitRow extends KeywordCacheRow {
+  term: string;
+  /** Свежесть снимка выдачи в часах — решает, можно ли верить ранку без перезамера. */
+  ageHours: number;
+}
+
+/**
+ * Ключи, в чьих закэшированных выдачах уже встречается приложение, — самый
+ * дешёвый источник индексации: эти выдачи собраны при анализе ДРУГИХ
+ * приложений, и попадание в них почти гарантирует ранжирование сейчас.
+ * Требует GIN-индекса idx_keyword_cache_ids (jsonb @> по массиву).
+ */
+export async function serpTermsContainingApp(
+  platform: string, country: string, appId: string, limit: number,
+): Promise<SerpHitRow[]> {
+  if (limit <= 0) return [];
+  return query<SerpHitRow>(
+    `SELECT term, ids, total_results AS "totalResults", volume, difficulty,
+            EXTRACT(EPOCH FROM (now() - captured_at)) / 3600 AS "ageHours"
+     FROM keyword_cache
+     WHERE platform = $1 AND country = $2 AND ids @> $3::jsonb
+     ORDER BY captured_at DESC
+     LIMIT $4`,
+    [platform, country, JSON.stringify(appId), limit],
+  );
+}

@@ -2,6 +2,7 @@ import { appLookup, suggest } from '../scrapers/appstore.js';
 import { nativeAppPage, nativeSearchIds } from '../scrapers/native.js';
 import { gpAppLookup, gpSearch, gpSuggest } from '../scrapers/googleplay.js';
 import { STOP_WORDS } from './stopWords.js';
+import { corpusCandidates, feedCorpus, SERP_FRESH_HOURS } from './corpus.js';
 
 export interface DiscoveredKeyword {
   term: string;
@@ -254,10 +255,30 @@ export async function discoverKeywords(
     app.title, app.primaryGenre, country, app.description, page?.genreNames ?? [],
   );
 
+  // Накопительный корпус гео: ключи, найденные через ДРУГИЕ приложения.
+  // SERP-хиты (приложение уже видели в кэшированной выдаче) — почти
+  // гарантированная индексация; token-match — проверяемая часть словаря.
+  const coreTokens = new Set<string>([
+    ...words(app.title), ...words(app.primaryGenre),
+    ...(page?.genreNames ?? []).flatMap((g) => words(g)),
+    ...descriptionTerms(app.description ?? '').words,
+  ]);
+  const corpus = await corpusCandidates(
+    'ios', String(appId), country,
+    coreTokens, new Set(candidates.map((c) => c.toLowerCase().trim())),
+  );
+  // Свежие кэшированные выдачи кладём в ids-кэш: их ранк отдаётся без
+  // единого запроса к Apple — это и делает корпусную проверку дешёвой.
+  for (const [term, hit] of corpus.serpHits) {
+    if (hit.ageHours < SERP_FRESH_HOURS) cacheSet(`${country}|${term}`, hit.ids);
+  }
+  const allTerms = [...candidates, ...corpus.terms];
+  feedCorpus('ios', country, allTerms);
+
   // Параллельный сбор ранков: ×6-8 быстрее чем for-await.
   // Apple channel pool в native.ts сам разрулит slot-throttling.
   const keywords: DiscoveredKeyword[] = (
-    await mapLimit(candidates, 8, async (term): Promise<DiscoveredKeyword | null> => {
+    await mapLimit(allTerms, 8, async (term): Promise<DiscoveredKeyword | null> => {
       const cacheKey = `${country}|${term.toLowerCase()}`;
       let ids = cacheGet(cacheKey);
       if (!ids) {
@@ -310,8 +331,23 @@ export async function discoverKeywordsGp(
     GP_MAX_CANDIDATES,
   );
 
+  // Корпус гео — как в iOS-варианте; свежие SERP-хиты не тратят запросы к Google.
+  const coreTokens = new Set<string>([
+    ...words(app.title), ...words(app.genre),
+    ...descriptionTerms(`${app.summary} ${app.description}`).words,
+  ]);
+  const corpus = await corpusCandidates(
+    'android', appId, country,
+    coreTokens, new Set(candidates.map((c) => c.toLowerCase().trim())),
+  );
+  for (const [term, hit] of corpus.serpHits) {
+    if (hit.ageHours < SERP_FRESH_HOURS) cacheSet(`gp|${country}|${term}`, hit.ids);
+  }
+  const allTerms = [...candidates, ...corpus.terms];
+  feedCorpus('android', country, allTerms);
+
   const keywords: DiscoveredKeyword[] = (
-    await mapLimit(candidates, 4, async (term): Promise<DiscoveredKeyword | null> => {
+    await mapLimit(allTerms, 4, async (term): Promise<DiscoveredKeyword | null> => {
       const cacheKey = `gp|${country}|${term.toLowerCase()}`;
       let ids = cacheGet(cacheKey);
       if (!ids) {

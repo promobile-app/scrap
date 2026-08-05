@@ -142,6 +142,50 @@ CREATE TABLE IF NOT EXISTS app_candidate_keywords (
 CREATE INDEX IF NOT EXISTS idx_app_candidate_kw_lookup
   ON app_candidate_keywords (platform, app_id, country);
 
+-- Накопительный корпус ключей по гео (аналог словаря FoxData).
+-- Пополняется при каждом discovery-прогоне, добавлении ключа в трекинг и
+-- замере метрик — ЛЮБЫМ пользователем по ЛЮБОМУ приложению. Discovery для
+-- нового приложения проверяет его не только по свежесгенерированным
+-- кандидатам, но и по этому корпусу, поэтому покрытие растёт со временем.
+CREATE TABLE IF NOT EXISTS keyword_corpus (
+  platform      TEXT NOT NULL,        -- ios / android
+  country       TEXT NOT NULL,
+  term          TEXT NOT NULL,
+  source        TEXT NOT NULL DEFAULT 'discovery', -- discovery|tracked|metrics|backfill
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (platform, country, term)
+);
+CREATE INDEX IF NOT EXISTS idx_keyword_corpus_geo
+  ON keyword_corpus (platform, country, last_seen_at DESC);
+
+-- GIN-индекс по спискам выдачи: даёт мгновенный ответ на вопрос
+-- «в каких закэшированных выдачах встречается приложение X» — это самый
+-- дешёвый источник индексации (ключи, найденные через ДРУГИЕ приложения).
+CREATE INDEX IF NOT EXISTS idx_keyword_cache_ids
+  ON keyword_cache USING GIN (ids jsonb_path_ops);
+
+-- Разовый бэкфилл корпуса из уже накопленных таблиц. Выполняется только
+-- когда корпус пуст (migrate запускается на каждом старте сервиса).
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM keyword_corpus LIMIT 1) THEN
+    INSERT INTO keyword_corpus (platform, country, term, source)
+      SELECT platform, country, lower(trim(term)), 'backfill' FROM keyword_cache
+    ON CONFLICT DO NOTHING;
+    INSERT INTO keyword_corpus (platform, country, term, source)
+      SELECT platform, country, lower(trim(term)), 'backfill' FROM app_candidate_keywords
+    ON CONFLICT DO NOTHING;
+    INSERT INTO keyword_corpus (platform, country, term, source)
+      SELECT DISTINCT platform, country, lower(trim(term)), 'backfill' FROM metric_checks
+    ON CONFLICT DO NOTHING;
+    -- keywords: таблица трекинга App Store (платформа не хранится — ios).
+    INSERT INTO keyword_corpus (platform, country, term, source)
+      SELECT 'ios', country, lower(trim(term)), 'backfill' FROM keywords
+    ON CONFLICT DO NOTHING;
+  END IF;
+END $$;
+
 -- Пользователи extension (email+password).
 CREATE TABLE IF NOT EXISTS users (
   id            BIGSERIAL PRIMARY KEY,

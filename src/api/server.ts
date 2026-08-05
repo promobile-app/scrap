@@ -21,6 +21,7 @@ import { discoverKeywords, discoverKeywordsGp } from '../analytics/discovery.js'
 import {
   startDiscoveryJob, getDiscoveryJobState, saturationFromResults, type UrlKeyword,
 } from '../analytics/discoverByUrl.js';
+import { feedCorpus } from '../analytics/corpus.js';
 import {
   upsertApp, upsertKeyword, linkAppKeyword,
   saveMetricCheck, getMetricHistory, distinctMetricTargets,
@@ -391,6 +392,10 @@ app.post<{
   const language = req.body.language;
   const android = req.body.platform === 'android';
 
+  // Трекаемые пользователями ключи — прямой сигнал реальных запросов ниши:
+  // пополняют накопительный корпус гео для будущих discovery других приложений.
+  feedCorpus(android ? 'android' : 'ios', country, keywords, 'tracked');
+
   // Логарифмическая оценка объёма по насыщенности выдачи (5-100).
   const volumeFromResults = (total: number) =>
     Math.round(5 + Math.min(1, Math.log10(total + 1) / Math.log10(251)) * 95);
@@ -480,6 +485,9 @@ app.get<{ Querystring: { term: string; country?: string; platform?: string } }>(
     const term = req.query.term;
     if (!term) return reply.code(400).send({ error: 'term required' });
     const country = req.query.country ?? config.defaultCountry;
+
+    // Каждый запрошенный пользователем ключ — вклад в накопительный корпус гео.
+    feedCorpus(req.query.platform === 'android' ? 'android' : 'ios', country, [term], 'metrics');
 
     // --- Google Play ---
     if (req.query.platform === 'android') {
