@@ -15,6 +15,7 @@ import {
   type DiscoveryJobRow,
 } from '../db/repo.js';
 import { llmRelevantTerms, type RelevanceAppContext } from './relevance.js';
+import { corpusCandidates, feedCorpus } from './corpus.js';
 import { notify } from '../notify.js';
 
 // Сколько уже сохранённых кандидатов нужно, чтобы пропустить дорогой BFS-этап
@@ -606,6 +607,19 @@ async function runJob(
     if (regenerate && persisted.length) {
       candidates = [...new Set([...candidates, ...persisted])].slice(0, MAX_KEYWORDS);
     }
+
+    // Накопительный корпус гео: ключи, найденные через ДРУГИЕ приложения
+    // (SERP-хиты из кэша выдач + термы словаря с общими токенами). Идут
+    // СВЕРХ потолка MAX_KEYWORDS (у корпуса свои лимиты) и ДО LLM-прохода,
+    // чтобы token-match кандидаты прошли ту же проверку релевантности;
+    // SERP-хиты докажут себя рангом при замере. Корпус пополняем всем
+    // пулом кандидатов: это словарь гео, а не список ключей приложения.
+    const corpus = await corpusCandidates(
+      platform, appId, country, coreTokens,
+      new Set(candidates.map((c) => c.toLowerCase().trim())),
+    );
+    if (corpus.terms.length) candidates = [...candidates, ...corpus.terms];
+    feedCorpus(platform, country, candidates);
 
     // LLM-проход релевантности (если подключён ANTHROPIC_API_KEY): отсекает
     // off-topic запросы, которые делят токен с приложением, но про другой продукт
