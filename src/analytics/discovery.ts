@@ -374,14 +374,16 @@ export async function discoverKeywordsGp(
 
   // Гибрид глубины: HTML-выдача видит ~20-30 позиций, поэтому rank=null при
   // непустой выдаче значит «возможно глубже», а не «не ранжируется». Самые
-  // перспективные из таких (по спросу) добиваем RPC-замером витрины —
-  // лимиты числа ключей и страниц в gpDeepRank.ts.
-  if (deepRecheckEnabled()) {
+  // перспективные из таких (по спросу) добиваем RPC-замером витрины.
+  // Бюджет 'sync': этот путь держит открытый HTTP-запрос дашборда, полный
+  // дозамер добавлял ~100с и ломал таймауты цепочки клиент→бекенд; полный
+  // бюджет остаётся у фоновых job'ов (discoverByUrl).
+  if (deepRecheckEnabled('sync')) {
     const unrankedByDemand = keywords
       .filter((k) => k.rank === null && k.totalResults > 0)
       .sort((a, b) => b.volumeScore - a.volumeScore);
     const deep = await gpDeepRanks(
-      appId, country, capRecheckTerms(unrankedByDemand.map((k) => k.term)),
+      appId, country, capRecheckTerms(unrankedByDemand.map((k) => k.term), 'sync'), 'sync',
     );
     for (const k of keywords) {
       const d = deep.get(k.term);

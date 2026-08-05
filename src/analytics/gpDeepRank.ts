@@ -7,11 +7,19 @@ import { langOf } from '../scrapers/googleplay.js';
 // витрины (~16 позиций на страницу, пауза 300мс между страницами). RPC на
 // каждый кандидат — до maxPages запросов, поэтому и число ключей, и глубина
 // ограничены отдельно от основного потолка кандидатов.
+// Полный бюджет — для фоновых discovery-job'ов (расширение), где время не
+// критично. Синхронный бюджет — для дашбордного /apps/:id/discover, который
+// держит открытый HTTP-запрос: полный дозамер (30×10 страниц с паузами)
+// добавлял ~100с и ответ переставал влезать в таймауты цепочки клиент→бекенд.
 const RPC_RECHECK_LIMIT = Number(process.env.DISCOVERY_RPC_RECHECK ?? 30);
 const RPC_RECHECK_PAGES = Number(process.env.DISCOVERY_RPC_RECHECK_PAGES ?? 10);
+const RPC_SYNC_LIMIT = Number(process.env.DISCOVERY_RPC_RECHECK_SYNC ?? 10);
+const RPC_SYNC_PAGES = Number(process.env.DISCOVERY_RPC_RECHECK_PAGES_SYNC ?? 5);
 // Конкурентность ниже, чем у HTML-замеров: у RPC уже есть межстраничная
 // пауза, а параллельные обходы страниц умножают шанс капчи.
 const RPC_CONCURRENCY = 2;
+
+export type RecheckBudget = 'job' | 'sync';
 
 export interface DeepRankResult {
   rank: number | null;
@@ -19,14 +27,21 @@ export interface DeepRankResult {
   ids: string[];
 }
 
-/** Доступен ли глубокий дозамер вообще (лимит можно занулить через env). */
-export function deepRecheckEnabled(): boolean {
-  return RPC_RECHECK_LIMIT > 0 && RPC_RECHECK_PAGES > 0;
+function limitsFor(budget: RecheckBudget): { limit: number; pages: number } {
+  return budget === 'sync'
+    ? { limit: RPC_SYNC_LIMIT, pages: RPC_SYNC_PAGES }
+    : { limit: RPC_RECHECK_LIMIT, pages: RPC_RECHECK_PAGES };
+}
+
+/** Доступен ли глубокий дозамер вообще (лимиты можно занулить через env). */
+export function deepRecheckEnabled(budget: RecheckBudget = 'job'): boolean {
+  const { limit, pages } = limitsFor(budget);
+  return limit > 0 && pages > 0;
 }
 
 /** Обрезает список кандидатов на дозамер до лимита RPC-бюджета. */
-export function capRecheckTerms(terms: string[]): string[] {
-  return terms.slice(0, RPC_RECHECK_LIMIT);
+export function capRecheckTerms(terms: string[], budget: RecheckBudget = 'job'): string[] {
+  return terms.slice(0, limitsFor(budget).limit);
 }
 
 /**
@@ -38,18 +53,20 @@ export async function gpDeepRanks(
   appId: string,
   country: string,
   terms: string[],
+  budget: RecheckBudget = 'job',
 ): Promise<Map<string, DeepRankResult>> {
   const out = new Map<string, DeepRankResult>();
-  if (!deepRecheckEnabled() || terms.length === 0) return out;
+  if (!deepRecheckEnabled(budget) || terms.length === 0) return out;
 
   const queue = [...terms];
   const language = langOf(country);
+  const { pages } = limitsFor(budget);
   const worker = async (): Promise<void> => {
     for (let term = queue.shift(); term !== undefined; term = queue.shift()) {
       try {
         const res = await gpRpcSearch(term, country, {
           language,
-          maxPages: RPC_RECHECK_PAGES,
+          maxPages: pages,
         });
         if (res.packageNames.length === 0) continue; // блокировка/пустой ответ — не перетираем дешёвый замер
         const idx = res.packageNames.indexOf(appId);

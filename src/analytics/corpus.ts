@@ -9,6 +9,11 @@ import {
 // это «возможно релевантные» термы корпуса, каждый стоит замера в сторе.
 const CORPUS_SERP_LIMIT = Number(process.env.DISCOVERY_CORPUS_SERP_EXTRA ?? 500);
 const CORPUS_TOKEN_LIMIT = Number(process.env.DISCOVERY_CORPUS_EXTRA ?? 200);
+// Android дороже: каждый добавленный терм — это gpSearch при concurrency 4
+// (у iOS — быстрый MZSearch при concurrency 8), а Google щедрее на капчу.
+// Поэтому у GP свои, более низкие потолки корпусных добавок.
+const CORPUS_SERP_LIMIT_GP = Number(process.env.DISCOVERY_CORPUS_SERP_EXTRA_GP ?? 200);
+const CORPUS_TOKEN_LIMIT_GP = Number(process.env.DISCOVERY_CORPUS_EXTRA_GP ?? 60);
 
 // Свежесть кэшированной выдачи, при которой ранк из неё можно отдавать
 // без перезамера (тот же горизонт, что у keyword_cache в discoverByUrl).
@@ -37,10 +42,12 @@ export async function corpusCandidates(
 ): Promise<CorpusCandidates> {
   const serpHits = new Map<string, SerpHitRow>();
   const terms = new Set<string>();
+  const serpLimit = platform === 'android' ? CORPUS_SERP_LIMIT_GP : CORPUS_SERP_LIMIT;
+  const tokenLimit = platform === 'android' ? CORPUS_TOKEN_LIMIT_GP : CORPUS_TOKEN_LIMIT;
   try {
     const [hits, matched] = await Promise.all([
-      serpTermsContainingApp(platform, country, appId, CORPUS_SERP_LIMIT),
-      corpusTermsMatching(platform, country, [...coreTokens], CORPUS_TOKEN_LIMIT),
+      serpTermsContainingApp(platform, country, appId, serpLimit),
+      corpusTermsMatching(platform, country, [...coreTokens], tokenLimit),
     ]);
     for (const hit of hits) {
       const t = hit.term.toLowerCase().trim();
