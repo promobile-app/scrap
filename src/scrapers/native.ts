@@ -273,3 +273,103 @@ export async function nativeSearchIds(
   nativeCounters.failures++;
   throw new Error(`nativeSearchIds failed: ${String(lastErr)}`);
 }
+
+/**
+ * Страница приложения с кодом страны в пути. Именно с кодом: вариант
+ * `itunes.apple.com/WebObjects/MZStore.woa/wa/viewSoftware?id=` и бесстрановый
+ * `apps.apple.com/app/id<N>` Apple зацикливает редиректом друг на друга (301
+ * туда-обратно, тело пустое). Со страной в пути ответ приходит сразу — и это
+ * тот же itml-JSON, что видит нативный клиент, а не HTML веб-витрины.
+ */
+const appPageUrl = (country: string, appId: string | number): string =>
+  `https://apps.apple.com/${country.toLowerCase()}/app/id${appId}`;
+
+interface NativeAppPageResponse {
+  storePlatformData?: {
+    'product-dv'?: { results?: Record<string, {
+      genreNames?: string[];
+      subtitle?: string;
+      name?: string;
+    }> };
+  };
+  pageData?: {
+    topApps?: { iphone?: { ids?: string[] } };
+    customersAlsoBoughtApps?: string[];
+    moreByThisDeveloper?: string[];
+  };
+}
+
+/** Нишевый контекст приложения глазами самого App Store. */
+export interface NativeAppPage {
+  /** Жанры НА ЯЗЫКЕ ВИТРИНЫ ("Cartes", "Casino"), а не английские из iTunes lookup. */
+  genreNames: string[];
+  /** Подзаголовок — вылизанное под ASO поле, которого нет в iTunes lookup. */
+  subtitle: string;
+  /**
+   * Приложения, которые Apple сама считает связанными: «покупают также» +
+   * топ категории. Точнее и дешевле, чем поиск конкурентов по своему названию.
+   */
+  relatedIds: string[];
+}
+
+/**
+ * Страница приложения из нативного клиента App Store.
+ *
+ * Нужна ради ниши: `genreNames` приходят на языке витрины (для fr — «Cartes»,
+ * «Casino», а не «Card», «Casino»), а `customersAlsoBoughtApps` — это готовый
+ * список соседей по нише от самой Apple. И то и другое даёт сид-слова, которых
+ * НЕТ ни в названии, ни в описании приложения, — именно тот класс ключей,
+ * который генератор до этого не мог достать (см. «21», «vegas», «poker» для
+ * блэкджек-приложения на витрине FR).
+ */
+export async function nativeAppPage(
+  appId: string | number,
+  country = config.defaultCountry,
+  language?: string,
+): Promise<NativeAppPage | null> {
+  const headers = {
+    'X-Apple-Store-Front': storeFront(country, language),
+    'User-Agent': NATIVE_UA,
+    'X-Apple-Client-Application': 'com.apple.AppStore',
+    Accept: 'application/json',
+  };
+
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < config.scrapeMaxRetries; attempt++) {
+    const channel = await acquireChannel();
+    try {
+      const dispatcher = nextDispatcher();
+      nativeCounters.requests++;
+      const reqOpts = dispatcher
+        ? { method: 'GET' as const, headers, dispatcher }
+        : { method: 'GET' as const, headers };
+      const res = await request(appPageUrl(country, appId), reqOpts);
+      if (res.statusCode >= 400) throw new Error(`HTTP ${res.statusCode}`);
+
+      const body = (await res.body.json()) as NativeAppPageResponse;
+      const product = body.storePlatformData?.['product-dv']?.results?.[String(appId)];
+      if (!product) return null;
+
+      const related = [
+        ...(body.pageData?.customersAlsoBoughtApps ?? []),
+        ...(body.pageData?.topApps?.iphone?.ids ?? []),
+      ];
+      return {
+        genreNames: product.genreNames ?? [],
+        subtitle: product.subtitle ?? '',
+        relatedIds: [...new Set(related)].filter((id) => id !== String(appId)),
+      };
+    } catch (err) {
+      lastErr = err;
+      const throttled = /HTTP (429|403)/.test(String(err));
+      if (throttled) { nativeCounters.throttled++; channel.bumpPenalty(); }
+      await sleep((throttled ? 4000 : 500) * 2 ** attempt + Math.random() * 400);
+    } finally {
+      releaseChannel(channel);
+    }
+  }
+  // Ниша — обогащение, а не обязательный источник: подбор должен работать и без неё.
+  nativeCounters.failures++;
+  console.warn(`[native] страница приложения ${appId}/${country} недоступна: ${String(lastErr)}`);
+  return null;
+}
