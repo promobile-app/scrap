@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc && cp src/db/schema.sql dist/db/schema.sql && mkdir -p dist/scrapers/finsky/proto dist/scrapers/finsky/devices && cp src/scrapers/finsky/proto/*.proto dist/scrapers/finsky/proto/ && cp src/scrapers/finsky/devices/*.properties dist/scrapers/finsky/devices/",
     "dev": "tsx watch src/api/server.ts",
-    "start": "node dist/db/migrate.js && node dist/api/server.js",
+    "start": "node dist/db/migrate.js && node dist/api/server.js & node dist/jobs/scheduler.js",
     "scrape": "tsx src/cli.ts",
     "scheduler": "tsx src/jobs/scheduler.ts",
     "db:migrate": "tsx src/db/migrate.ts",
@@ -38,3 +38,4 @@
     "typescript": "^5.7.3"
   }
 }
+
