@@ -35,7 +35,10 @@ const STOREFRONTS: Record<string, Storefront> = {
   de: { id: 143443, langs: { de: 4, en: 2 } },
   ua: { id: 143492, langs: { ru: 16, en: 2 } },
   ru: { id: 143469, langs: { ru: 16, en: 2 } },
-  pl: { id: 143478, langs: { pl: 19, en: 2 } },
+  // pl был 19 — Apple отдаёт на `143478-19,29` HTTP 400, и любой запрос с
+  // language=pl падал (rank/volume/difficulty не сохранялись вовсе). Проверено
+  // перебором lang-id по витрине: валидны только 20 (польский) и 2 (английский).
+  pl: { id: 143478, langs: { pl: 20, en: 2 } },
   fr: { id: 143442, langs: { fr: 3, en: 2 } },
   es: { id: 143454, langs: { es: 8, en: 2 } },
   it: { id: 143450, langs: { it: 7, en: 2 } },
