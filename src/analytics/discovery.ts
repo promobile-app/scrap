@@ -51,7 +51,7 @@ function demandFromSignals(autocompleteSignal: number, total: number, term: stri
  * не-латинские названия («Spotify: музика та подкасти») не должны схлопываться
  * в пустоту, иначе для таких приложений нет сид-слов.
  */
-function words(s: string): string[] {
+export function words(s: string): string[] {
   return s
     .toLowerCase()
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
@@ -238,7 +238,7 @@ const GP_MAX_CANDIDATES = Number(process.env.DISCOVERY_MAX_CANDIDATES_GP ?? 250)
 // Жёсткий потолок замеров за один прогон (кандидаты + корпус). Ограничивает
 // худший случай по времени ответа: корпус гео растёт бесконечно, и без этого
 // потолка через полгода один клик уходил бы в тысячи запросов к магазину.
-const MAX_MEASURE = Number(process.env.DISCOVERY_MAX_MEASURE ?? 2000);
+const MAX_MEASURE = Number(process.env.DISCOVERY_MAX_MEASURE ?? 5000);
 
 // Ширина генерации: сколько подсказок берём с каждого сида и сколько сидов
 // уходит во вторую волну. Поднимать вместе с потолком — иначе кандидатов
@@ -270,8 +270,10 @@ const SUGGEST_CONCURRENCY = Number(process.env.DISCOVERY_SUGGEST_CONCURRENCY ?? 
 const COMPETITOR_APPS = Number(process.env.DISCOVERY_COMPETITOR_APPS ?? 12);
 
 // Свежесть SERP-снимка в общем кэше, при которой ранк можно отдавать без
-// перезамера. Тот же горизонт, что у keyword_cache в discoverByUrl.
-const SERP_CACHE_TTL_HOURS = Number(process.env.DISCOVERY_SERP_TTL_HOURS ?? 6);
+// перезамера. Согласовано с SERP_FRESH_HOURS в corpus.ts — это одно и то же
+// окно, и расхождение означало бы, что корпусные хиты считаются годными, а
+// те же самые термы при замере перезапрашиваются.
+const SERP_CACHE_TTL_HOURS = Number(process.env.DISCOVERY_SERP_TTL_HOURS ?? 24);
 
 /**
  * Частотные слова и биграммы из описания приложения — самый богатый

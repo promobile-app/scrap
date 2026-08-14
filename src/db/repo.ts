@@ -409,6 +409,49 @@ export async function upsertCachedSerpBatch(
   );
 }
 
+/**
+ * Из списка термов — те, по которым в кэше уже есть снимок моложе ttl.
+ *
+ * Нужно затравке словаря: её ценность в НОВЫХ выдачах, и перемеривать то,
+ * что уже лежит в базе, — впустую потраченный бюджет запросов к магазину.
+ * Горизонт тут длиннее, чем при замере ранка (там 6 часов): для словаря
+ * важна широта охвата, а не свежесть позиций.
+ */
+export async function freshCachedTerms(
+  platform: string, country: string, terms: string[], ttlHours: number,
+): Promise<Set<string>> {
+  const out = new Set<string>();
+  if (terms.length === 0) return out;
+  const rows = await query<{ term: string }>(
+    `SELECT term FROM keyword_cache
+     WHERE platform = $1 AND country = $2 AND term = ANY($3::text[])
+       AND captured_at > now() - ($4 || ' hours')::interval`,
+    [platform, country, terms, String(ttlHours)],
+  );
+  for (const r of rows) out.add(r.term);
+  return out;
+}
+
+/** Размер накопленного словаря гео — для отчёта затравки и мониторинга. */
+export async function corpusStats(
+  platform: string, country: string,
+): Promise<{ cachedTerms: number; corpusTerms: number }> {
+  const [cache, corpus] = await Promise.all([
+    query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM keyword_cache WHERE platform = $1 AND country = $2`,
+      [platform, country],
+    ),
+    query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM keyword_corpus WHERE platform = $1 AND country = $2`,
+      [platform, country],
+    ),
+  ]);
+  return {
+    cachedTerms: Number(cache[0]?.n ?? 0),
+    corpusTerms: Number(corpus[0]?.n ?? 0),
+  };
+}
+
 // --- Снимок подбора по приложению ----------------------------------------
 
 export interface DiscoverySnapshotRow<T = unknown> {
