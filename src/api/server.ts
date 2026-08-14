@@ -9,7 +9,7 @@ import { query } from '../db/pool.js';
 import { appLookup, searchApps, getRank, lookupApps } from '../scrapers/appstore.js';
 import { nativeSearchIds, storeLanguages, getNativePoolStats } from '../scrapers/native.js';
 import { getHttpPoolStats } from '../scrapers/http.js';
-import { proxyCount, proxyEnabled } from '../scrapers/proxy.js';
+import { proxyCooldownCount, proxyCount, proxyEnabled } from '../scrapers/proxy.js';
 import { gpSearch, gpAppLookup, gpTopChart, langOf } from '../scrapers/googleplay.js';
 import { gpRpcSearch } from '../scrapers/gplayRpc.js';
 import { finskyDetails } from '../scrapers/finsky/details.js';
@@ -734,7 +734,16 @@ app.get('/health/apple', async () => {
   const pools = () => ({
     native: getNativePoolStats(),
     http: getHttpPoolStats(),
-    proxies: { enabled: proxyEnabled(), count: proxyCount() },
+    // cooldown по площадкам: если apple близок к count — пул выбит и запросы
+    // уходят напрямую с одного egress-IP, а это гарантированные 429 от Apple.
+    proxies: {
+      enabled: proxyEnabled(),
+      count: proxyCount(),
+      cooldown: {
+        apple: proxyCooldownCount('apple'),
+        google: proxyCooldownCount('google'),
+      },
+    },
   });
   try {
     const ids = await nativeSearchIds('test', 'us');

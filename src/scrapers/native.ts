@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { request } from 'undici';
 import { config } from '../config.js';
-import { nextDispatcher } from './proxy.js';
+import { dispatcherForSlot } from './proxy.js';
 
 /**
  * Нативный поиск App Store — тот же endpoint, что использует приложение
@@ -118,18 +118,23 @@ const SEARCH_URL = 'https://search.itunes.apple.com/WebObjects/MZSearch.woa/wa/s
 
 class AppleChannel {
   readonly guid: string;
+  /** Номер канала = номер закреплённого за ним прокси (см. dispatcherForSlot). */
+  readonly slot: number;
   nextSlotAt = 0;
   inFlight = 0;
 
-  constructor() {
+  constructor(slot: number) {
+    this.slot = slot;
     this.guid = randomBytes(6).toString('hex').toUpperCase();
   }
 
   async waitSlot(): Promise<void> {
     const now = Date.now();
-    const slot = Math.max(now, this.nextSlotAt);
-    this.nextSlotAt = slot + config.scrapeDelayMs;
-    if (slot > now) await sleep(slot - now);
+    // Не `slot`: так называется номер канала, и локальная переменная его
+    // затеняла бы прямо в методе, где важны оба.
+    const at = Math.max(now, this.nextSlotAt);
+    this.nextSlotAt = at + config.scrapeDelayMs;
+    if (at > now) await sleep(at - now);
   }
 
   /** При 429/403 — увеличенный backoff на этом канале, чтобы притормозить
@@ -143,7 +148,9 @@ class AppleChannel {
 }
 
 const CHANNEL_COUNT = Number(process.env.APPLE_CHANNELS ?? 6);
-const CHANNELS: AppleChannel[] = Array.from({ length: CHANNEL_COUNT }, () => new AppleChannel());
+const CHANNELS: AppleChannel[] = Array.from(
+  { length: CHANNEL_COUNT }, (_, i) => new AppleChannel(i),
+);
 
 // Round-robin: берём канал с минимальным inFlight, чтобы нагрузка
 // распределялась равномерно (а не «канал 0, канал 0, канал 1, ...»).
@@ -239,8 +246,9 @@ export async function nativeSearchIds(
         Accept: 'application/json',
       };
 
-      // Один прокси на весь запрос (включая редирект-хопы) — round-robin по пулу.
-      const dispatcher = nextDispatcher();
+      // Один прокси на весь запрос (включая редирект-хопы), закреплённый за
+      // каналом: guid устройства и адрес должны быть устойчивой парой.
+      const dispatcher = dispatcherForSlot(channel.slot, 'apple');
       nativeCounters.requests++;
       const reqOpts = dispatcher ? { method: 'GET' as const, headers, dispatcher } : { method: 'GET' as const, headers };
       // MZSearch отвечает 302 на MZStore — следуем за редиректом вручную.
@@ -341,7 +349,7 @@ export async function nativeAppPage(
   for (let attempt = 0; attempt < config.scrapeMaxRetries; attempt++) {
     const channel = await acquireChannel();
     try {
-      const dispatcher = nextDispatcher();
+      const dispatcher = dispatcherForSlot(channel.slot, 'apple');
       nativeCounters.requests++;
       const reqOpts = dispatcher
         ? { method: 'GET' as const, headers, dispatcher }
