@@ -12,6 +12,8 @@ import { getHttpPoolStats } from '../scrapers/http.js';
 import { proxyCount, proxyEnabled } from '../scrapers/proxy.js';
 import { gpSearch, gpAppLookup, gpTopChart, langOf } from '../scrapers/googleplay.js';
 import { gpRpcSearch } from '../scrapers/gplayRpc.js';
+import { finskyDetails } from '../scrapers/finsky/details.js';
+import { finskyConfigured, finskySession } from '../scrapers/finsky/session.js';
 import { gpEstimateVolume } from '../analytics/googleplay/volume.js';
 import { gpEstimateDifficulty } from '../analytics/googleplay/difficulty.js';
 import { topChart } from '../scrapers/charts.js';
@@ -347,6 +349,55 @@ app.get<{ Params: { id: string } }>('/apps/:id', async (req, reply) => {
   const info = await appLookup(Number(req.params.id));
   if (!info) return reply.code(404).send({ error: 'not found' });
   return info;
+});
+
+/**
+ * Карточка приложения: размер, версия, дата обновления.
+ *
+ * Android идёт через Finsky, потому что размера в вебе Play нет вообще — его
+ * убрали из листинга, в разметке страницы нет ни числа, ни подписи. Мобильный
+ * клиент получает его в AppDetails.infoDownloadSize. Оттуда же приходит
+ * настоящая версия там, где веб рисует «Varies with device».
+ *
+ * Размер приходит для профиля устройства FINSKY_DEVICE (по умолчанию px_9a):
+ * при app bundle Play собирает APK под устройство, единого числа не бывает,
+ * о чём и говорит variesWithDevice.
+ */
+app.get<{
+  Params: { id: string };
+  Querystring: { platform?: string; language?: string };
+}>('/apps/:id/details', async (req, reply) => {
+  if (req.query.platform !== 'android') {
+    // У App Store размер отдаёт обычный lookup (fileSizeBytes), Finsky не нужен.
+    return reply.code(400).send({ error: 'platform=android required' });
+  }
+  if (!finskyConfigured()) {
+    return reply.code(503).send({ error: 'finsky not configured' });
+  }
+
+  try {
+    const auth = await finskySession(req.query.language);
+    const details = await finskyDetails(auth, req.params.id);
+    if (!details) return reply.code(404).send({ error: 'app not found' });
+
+    return {
+      appId: details.packageName,
+      platform: 'android',
+      title: details.title,
+      developer: details.developer,
+      // Байты, как отдаёт App Store — на стороне клиента одна и та же арифметика.
+      size: details.size,
+      variesWithDevice: details.variesWithDevice,
+      version: details.version,
+      updatedOn: details.updatedOn,
+      installs: details.installs,
+      rating: details.rating,
+      ratings: details.ratings,
+    };
+  } catch (e) {
+    req.log.error({ err: e }, 'finsky details failed');
+    return reply.code(502).send({ error: 'finsky unavailable' });
+  }
 });
 
 // Отслеживаемые ключи приложения + последний rank.
