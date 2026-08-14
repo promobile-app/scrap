@@ -19,7 +19,7 @@ import { gpEstimateDifficulty } from '../analytics/googleplay/difficulty.js';
 import { topChart } from '../scrapers/charts.js';
 import { estimateVolume, getAsaSourceStatus } from '../analytics/appstore/volume.js';
 import { estimateDifficulty } from '../analytics/appstore/difficulty.js';
-import { discoverKeywords, discoverKeywordsGp } from '../analytics/discovery.js';
+import { discoverKeywordsCached } from '../analytics/discoveryCache.js';
 import {
   startDiscoveryJob, getDiscoveryJobState, saturationFromResults, type UrlKeyword,
 } from '../analytics/discoverByUrl.js';
@@ -260,14 +260,25 @@ app.get('/history/all', async () => {
 
 // FoxData-флоу: приложение + гео -> ключевые слова с позициями.
 // platform=android -> Google Play discovery (appId = имя пакета).
-app.get<{ Params: { id: string }; Querystring: { country?: string; platform?: string } }>(
+//
+// По умолчанию отвечает снимком и обновляет его в фоне (см. discoveryCache):
+// полный подбор идёт десятки секунд, и держать на нём HTTP-запрос клиента
+// нельзя. `wait=1` возвращает прежнее синхронное поведение — для крона и
+// разовых замеров, которым нужен именно свежий результат.
+app.get<{
+  Params: { id: string };
+  Querystring: {
+    country?: string; platform?: string; wait?: string; language?: string;
+  };
+}>(
   '/apps/:id/discover',
   async (req) => {
     const country = req.query.country ?? config.defaultCountry;
-    if (req.query.platform === 'android') {
-      return discoverKeywordsGp(req.params.id, country);
-    }
-    return discoverKeywords(Number(req.params.id), country);
+    const platform = req.query.platform === 'android' ? 'android' : 'ios';
+    return discoverKeywordsCached(platform, req.params.id, country, {
+      wait: req.query.wait === '1',
+      language: req.query.language,
+    });
   },
 );
 

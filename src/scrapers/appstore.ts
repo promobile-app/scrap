@@ -161,10 +161,18 @@ export async function getRank(
  * Autocomplete-подсказки App Store по префиксу.
  * Эндпоинт отдаёт XML-plist: список dict со значением <string>термин</string>.
  */
-export async function suggest(term: string, country = config.defaultCountry): Promise<string[]> {
+export async function suggest(
+  term: string,
+  country = config.defaultCountry,
+  language?: string,
+): Promise<string[]> {
   const xml = await fetchText(STOREFRONT, {
     query: { clientApplication: 'Software', term },
-    headers: { 'X-Apple-Store-Front': storeFront(country) },
+    // Язык витрины важен ровно так же, как для выдачи: на двуязычных витринах
+    // (ua ru/en, ca en/fr, de de/en) подсказки на разных языках разные, и без
+    // него подбор шёл по языку витрины по умолчанию независимо от того, какой
+    // язык отслеживает пользователь.
+    headers: { 'X-Apple-Store-Front': storeFront(country, language) },
   });
   const matches = [...xml.matchAll(/<string>([^<]*)<\/string>/g)].map((m) =>
     m[1]!.replace(/&amp;/g, '&'),

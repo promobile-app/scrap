@@ -375,6 +375,115 @@ export async function upsertCachedKeyword(
   );
 }
 
+/**
+ * Батч-запись SERP-снимков (только выдача, без volume/difficulty).
+ *
+ * Discovery по приложению считает спрос от СВОЕГО автокомплит-сигнала, а
+ * сложность не считает вовсе — записывать эти значения в общий кэш нельзя,
+ * их прочитает discoverByUrl и выдаст чужие цифры за свои. Поэтому апдейт
+ * трогает только ids/total_results/captured_at, а на вставке кладёт нули:
+ * читатели, которым нужны метрики, считают такую строку промахом
+ * (см. cachedKeyword в discoverByUrl.ts), а тем, кому нужна только выдача
+ * (serpTermsContainingApp, замер ранка), строка полезна как есть.
+ */
+export async function upsertCachedSerpBatch(
+  platform: string,
+  country: string,
+  rows: { term: string; ids: string[] }[],
+): Promise<void> {
+  if (rows.length === 0) return;
+  await query(
+    `INSERT INTO keyword_cache
+       (platform, country, term, ids, total_results, volume, difficulty, captured_at)
+     SELECT $1, $2, t.term, t.ids::jsonb, jsonb_array_length(t.ids::jsonb), 0, 0, now()
+     FROM UNNEST($3::text[], $4::text[]) AS t(term, ids)
+     ON CONFLICT (platform, country, term) DO UPDATE SET
+       ids = EXCLUDED.ids,
+       total_results = EXCLUDED.total_results,
+       captured_at = now()`,
+    [
+      platform, country,
+      rows.map((r) => r.term),
+      rows.map((r) => JSON.stringify(r.ids)),
+    ],
+  );
+}
+
+// --- Снимок подбора по приложению ----------------------------------------
+
+export interface DiscoverySnapshotRow<T = unknown> {
+  appTitle: string;
+  keywords: T[];
+  capturedAt: Date;
+}
+
+export async function getDiscoverySnapshot<T = unknown>(
+  platform: string, appId: string, country: string,
+): Promise<DiscoverySnapshotRow<T> | null> {
+  const rows = await query<DiscoverySnapshotRow<T>>(
+    `SELECT app_title AS "appTitle", keywords, captured_at AS "capturedAt"
+     FROM app_discovery_snapshots
+     WHERE platform = $1 AND app_id = $2 AND country = $3`,
+    [platform, appId, country],
+  );
+  return rows[0] ?? null;
+}
+
+export async function saveDiscoverySnapshot(
+  platform: string, appId: string, country: string,
+  appTitle: string, keywords: unknown[],
+): Promise<void> {
+  await query(
+    `INSERT INTO app_discovery_snapshots
+       (platform, app_id, country, app_title, keywords, captured_at)
+     VALUES ($1, $2, $3, $4, $5::jsonb, now())
+     ON CONFLICT (platform, app_id, country) DO UPDATE SET
+       app_title = EXCLUDED.app_title,
+       keywords = EXCLUDED.keywords,
+       captured_at = now()`,
+    [platform, appId, country, appTitle, JSON.stringify(keywords)],
+  );
+}
+
+// --- Кэш автокомплита (префикс -> подсказки) ------------------------------
+
+/** Свежие (моложе ttl часов) подсказки по префиксам. Ключ карты — префикс. */
+export async function getCachedSuggests(
+  platform: string, country: string, terms: string[], ttlHours = 24,
+): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  if (terms.length === 0) return out;
+  const rows = await query<{ term: string; hints: string[] }>(
+    `SELECT term, hints FROM suggest_cache
+     WHERE platform = $1 AND country = $2 AND term = ANY($3::text[])
+       AND captured_at > now() - ($4 || ' hours')::interval`,
+    [platform, country, terms, String(ttlHours)],
+  );
+  for (const r of rows) out.set(r.term, r.hints);
+  return out;
+}
+
+export async function upsertCachedSuggestBatch(
+  platform: string,
+  country: string,
+  rows: { term: string; hints: string[] }[],
+): Promise<void> {
+  if (rows.length === 0) return;
+  await query(
+    `INSERT INTO suggest_cache (platform, country, term, hints, captured_at)
+     SELECT $1, $2, t.term, t.hints::jsonb, now()
+     FROM UNNEST($3::text[], $4::text[]) AS t(term, hints)
+     ON CONFLICT (platform, country, term) DO UPDATE SET
+       hints = EXCLUDED.hints,
+       captured_at = now()`,
+    [
+      platform, country,
+      rows.map((r) => r.term),
+      rows.map((r) => JSON.stringify(r.hints)),
+    ],
+  );
+}
+
 /** Постоянный словарь «кандидатных ключей» для приложения в стране. */
 export async function getAppCandidateKeywords(
   platform: string, appId: string, country: string,

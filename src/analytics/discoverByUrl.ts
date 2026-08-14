@@ -402,7 +402,11 @@ async function cachedKeyword(
   if (mem) return mem;
   try {
     const db = await getCachedKeyword(platform, country, term);
-    if (db) { keywordCache.set(key, db); return db; }
+    // difficulty = 0 => строку положил SERP-только писатель (discovery.ts,
+    // upsertCachedSerpBatch): выдача в ней настоящая, а volume/difficulty
+    // не измерялись. Здесь нужны все четыре поля, поэтому это промах —
+    // домеряем и перезаписываем метрики поверх той же выдачи.
+    if (db && db.difficulty > 0) { keywordCache.set(key, db); return db; }
   } catch {
     // ошибки БД-кэша не должны валить подбор
   }
