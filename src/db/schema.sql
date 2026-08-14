@@ -126,6 +126,33 @@ CREATE TABLE IF NOT EXISTS keyword_cache (
 CREATE INDEX IF NOT EXISTS idx_keyword_cache_time
   ON keyword_cache (captured_at);
 
+-- Кэш автокомплита магазина по префиксу. Подсказки меняются медленно (дни),
+-- а discovery с алфавитным расширением делает их сотнями на прогон — без
+-- общего кэша каждый повторный подбор заново оплачивает всю генерацию.
+CREATE TABLE IF NOT EXISTS suggest_cache (
+  platform    TEXT NOT NULL,        -- ios / android
+  country     TEXT NOT NULL,
+  term        TEXT NOT NULL,        -- префикс, по которому спрашивали подсказки
+  hints       JSONB NOT NULL,
+  captured_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (platform, country, term)
+);
+CREATE INDEX IF NOT EXISTS idx_suggest_cache_time
+  ON suggest_cache (captured_at);
+
+-- Последний готовый результат подбора по паре (приложение, гео).
+-- Нужен, чтобы клик по «Индексации» отвечал мгновенно: отдаём снимок, а
+-- пересчёт (десятки секунд запросов к магазину) уходит в фон.
+CREATE TABLE IF NOT EXISTS app_discovery_snapshots (
+  platform    TEXT NOT NULL,        -- ios / android
+  app_id      TEXT NOT NULL,
+  country     TEXT NOT NULL,
+  app_title   TEXT NOT NULL DEFAULT '',
+  keywords    JSONB NOT NULL,
+  captured_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (platform, app_id, country)
+);
+
 -- Постоянный словарь «кандидатных ключей» для пары (платформа, приложение, страна).
 -- Заполняется при каждом успешном discovery-прогоне и переживает рестарты.
 -- Любой следующий пользователь, запросивший то же приложение, не пересчитывает

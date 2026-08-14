@@ -147,7 +147,18 @@ export interface GpRpcSearchResult {
 export async function gpRpcSearch(
   query: string,
   country = config.defaultCountry,
-  opts: { language?: string; maxPages?: number; delayMs?: number } = {},
+  opts: {
+    language?: string;
+    maxPages?: number;
+    delayMs?: number;
+    /**
+     * Пакет, ради которого идёт обход. Как только он найден, листать дальше
+     * незачем — позиция уже известна. Для замера индексации это основной
+     * режим: приложения, которые реально ранжируются, чаще всего находятся
+     * на первой странице, и обход стоит 1 запрос вместо пяти.
+     */
+    stopAt?: string;
+  } = {},
 ): Promise<GpRpcSearchResult> {
   const language = opts.language ?? 'en';
   const maxPages = opts.maxPages ?? 15;
@@ -157,6 +168,7 @@ export async function gpRpcSearch(
   const seen = new Set<string>();
   let token = '';
   let pages = 0;
+  let found = false;
 
   while (pages < maxPages) {
     const page = await gpRpcSearchPage(query, country, language, token);
@@ -167,13 +179,21 @@ export async function gpRpcSearch(
       seen.add(pkg);
       packageNames.push(pkg);
     }
+    if (opts.stopAt && seen.has(opts.stopAt)) { found = true; break; }
     token = page.nextPageToken;
     // Ни токена, ни новых пакетов — выдача кончилась.
     if (!token || packageNames.length === before) break;
     if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
   }
 
-  return { term: query, packageNames, pages, truncated: Boolean(token) && pages >= maxPages };
+  return {
+    term: query,
+    packageNames,
+    pages,
+    // Досрочная остановка по найденному пакету — это не усечение: позиция
+    // точна, просто хвост выдачи не понадобился.
+    truncated: !found && Boolean(token) && pages >= maxPages,
+  };
 }
 
 /** Позиция приложения по ключу. null = вне пройденной глубины. */

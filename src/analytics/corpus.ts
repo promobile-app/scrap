@@ -56,6 +56,52 @@ export async function corpusCandidates(
   return { terms: [...terms], serpHits };
 }
 
+// Сколько ключей забираем «через конкурентов». Это самый качественный
+// источник расширения: если по ключу ранжируется приложение из той же ниши,
+// шанс, что по нему ранжируемся и мы, кратно выше, чем у случайного терма
+// корпуса. Стоимость генерации — только запросы к своей БД.
+const COMPETITOR_SERP_PER_APP = Number(process.env.DISCOVERY_COMPETITOR_SERP_PER_APP ?? 80);
+const COMPETITOR_SERP_TOTAL = Number(process.env.DISCOVERY_COMPETITOR_SERP_TOTAL ?? 400);
+
+/**
+ * Ключи, по которым в накопленных выдачах ранжируются конкуренты приложения.
+ *
+ * Так работает расширение у больших ASO-сервисов: словарь ключей у них общий,
+ * и для нового приложения они проверяют не только его собственную лексику, но
+ * и то, по чему находятся соседи по нише. У нас роль словаря играет
+ * keyword_cache, который пополняется каждым подбором.
+ */
+export async function competitorSerpTerms(
+  platform: 'ios' | 'android',
+  country: string,
+  competitorIds: string[],
+  existing: ReadonlySet<string>,
+): Promise<string[]> {
+  if (competitorIds.length === 0 || COMPETITOR_SERP_TOTAL <= 0) return [];
+  const terms = new Set<string>();
+  try {
+    // По одному запросу на конкурента: условие `ids @> [id]` ложится на
+    // GIN-индекс idx_keyword_cache_ids, а OR/ANY по массиву — уже нет.
+    const perApp = await Promise.all(
+      competitorIds.map((id) =>
+        serpTermsContainingApp(platform, country, id, COMPETITOR_SERP_PER_APP)
+          .catch(() => [] as SerpHitRow[]),
+      ),
+    );
+    for (const hits of perApp) {
+      for (const hit of hits) {
+        const t = hit.term.toLowerCase().trim();
+        if (existing.has(t)) continue;
+        terms.add(t);
+        if (terms.size >= COMPETITOR_SERP_TOTAL) return [...terms];
+      }
+    }
+  } catch {
+    // БД недоступна — расширение просто не сработает.
+  }
+  return [...terms];
+}
+
 /** Fire-and-forget пополнение корпуса: ошибки БД глотаем сознательно. */
 export function feedCorpus(
   platform: 'ios' | 'android', country: string, terms: string[], source = 'discovery',
