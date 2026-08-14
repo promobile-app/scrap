@@ -7,12 +7,15 @@ import {
 // кандидатов. SERP-хиты (приложение уже видели в закэшированной выдаче)
 // почти гарантированно ранжируются, поэтому их лимит выше; token-match —
 // это «возможно релевантные» термы корпуса, каждый стоит замера в сторе.
-const CORPUS_SERP_LIMIT = Number(process.env.DISCOVERY_CORPUS_SERP_EXTRA ?? 500);
-const CORPUS_TOKEN_LIMIT = Number(process.env.DISCOVERY_CORPUS_EXTRA ?? 200);
+const CORPUS_SERP_LIMIT = Number(process.env.DISCOVERY_CORPUS_SERP_EXTRA ?? 3000);
+const CORPUS_TOKEN_LIMIT = Number(process.env.DISCOVERY_CORPUS_EXTRA ?? 1000);
 
-// Свежесть кэшированной выдачи, при которой ранк из неё можно отдавать
-// без перезамера (тот же горизонт, что у keyword_cache в discoverByUrl).
-export const SERP_FRESH_HOURS = 6;
+// Свежесть кэшированной выдачи, при которой ранк из неё можно отдавать без
+// перезамера. Сутки, а не 6 часов: именно это окно делает затравленный
+// словарь бесплатным — SERP-хит в его пределах не стоит ни одного запроса к
+// магазину. Позиции при этом остаются суточной давности, что соответствует
+// гранулярности отчётов у сопоставимых сервисов.
+export const SERP_FRESH_HOURS = Number(process.env.DISCOVERY_SERP_TTL_HOURS ?? 24);
 
 export interface CorpusCandidates {
   /** Термы корпуса, которых не было среди сгенерированных кандидатов. */

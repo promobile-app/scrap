@@ -21,6 +21,9 @@ import { estimateVolume, getAsaSourceStatus } from '../analytics/appstore/volume
 import { estimateDifficulty } from '../analytics/appstore/difficulty.js';
 import { discoverKeywordsCached } from '../analytics/discoveryCache.js';
 import {
+  lastSeedReport, seedGeoCorpus, seedInProgress,
+} from '../analytics/corpusSeeder.js';
+import {
   startDiscoveryJob, getDiscoveryJobState, saturationFromResults, type UrlKeyword,
 } from '../analytics/discoverByUrl.js';
 import { feedCorpus } from '../analytics/corpus.js';
@@ -677,6 +680,43 @@ app.get<{ Querystring: { term?: string; country?: string; platform?: string; app
 // Доступные языки витрины для страны.
 app.get<{ Querystring: { country?: string } }>('/languages', async (req) => {
   return { languages: storeLanguages(req.query.country ?? config.defaultCountry) };
+});
+
+// --- Затравка словаря гео ---------------------------------------------------
+// Один прогон — тысячи запросов к магазину, поэтому маршрут закрыт токеном:
+// без CORPUS_SEED_TOKEN он не работает вовсе, а не открыт всем подряд.
+const seedTokenOk = (req: { headers: { authorization?: string } }): boolean => {
+  const expected = process.env.CORPUS_SEED_TOKEN;
+  if (!expected) return false;
+  const auth = req.headers.authorization ?? '';
+  return auth.startsWith('Bearer ') && auth.slice(7) === expected;
+};
+
+app.post<{ Querystring: { country?: string; budget?: string } }>(
+  '/corpus/seed',
+  async (req, reply) => {
+    if (!process.env.CORPUS_SEED_TOKEN) {
+      return reply.code(503).send({ error: 'CORPUS_SEED_TOKEN не задан' });
+    }
+    if (!seedTokenOk(req)) return reply.code(401).send({ error: 'unauthorized' });
+    if (seedInProgress()) {
+      return reply.code(409).send({ error: 'затравка уже идёт', last: lastSeedReport() });
+    }
+
+    const country = (req.query.country ?? config.defaultCountry).toLowerCase();
+    const budget = req.query.budget ? Number(req.query.budget) : undefined;
+    // Отвечаем сразу: прогон длится минуты, держать на нём HTTP-запрос незачем.
+    // Ошибку гасим здесь же — иначе она всплывёт как unhandled rejection.
+    void seedGeoCorpus(country, { budget }).catch((e: unknown) => {
+      console.error('[seed] прогон упал:', e instanceof Error ? e.message : e);
+    });
+    return { started: true, country, budget: budget ?? null };
+  },
+);
+
+app.get('/corpus/seed/status', async (req, reply) => {
+  if (!seedTokenOk(req)) return reply.code(401).send({ error: 'unauthorized' });
+  return { running: seedInProgress(), last: lastSeedReport() };
 });
 
 app.get('/health', async () => ({ ok: true }));
