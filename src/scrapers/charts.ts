@@ -16,9 +16,34 @@ interface RssFeed {
   };
 }
 
+/** Ответ легаси-фида iTunes — единственного, который умеет чарты по жанру. */
+interface LegacyFeed {
+  feed: {
+    entry?: {
+      id: { attributes: { 'im:id': string } };
+      'im:name': { label: string };
+      'im:artist': { label: string };
+    }[];
+  };
+}
+
+const LEGACY_FEED_NAME: Record<ChartType, string> = {
+  'top-free': 'topfreeapplications',
+  'top-paid': 'toppaidapplications',
+};
+
 /**
- * Топ-чарты App Store по стране/категории через Apple Marketing RSS.
- * genre — числовой id жанра Apple (например 6014 = Games), либо undefined для всех.
+ * Топ-чарты App Store по стране и (опционально) категории.
+ *
+ * Два разных фида, и это не про вкус:
+ * - общий чарт — Marketing Tools RSS, актуальный фид Apple;
+ * - чарт категории — легаси-фид iTunes: Marketing Tools жанры не отдаёт вообще,
+ *   любой genre-сегмент в его URL отвечает 404, из-за чего категорийные срезы
+ *   молча не собирались.
+ *
+ * Оба фида отдают максимум 100 позиций: Marketing Tools на limit=200 отвечает
+ * 500, легаси молча обрезает до сотни. Приложение вне первой сотни в чарте
+ * считаем отсутствующим.
  */
 export async function topChart(
   type: ChartType = 'top-free',
@@ -26,8 +51,22 @@ export async function topChart(
   genre?: number,
   limit = 100,
 ): Promise<ChartEntry[]> {
-  const genrePart = genre ? `/${genre}` : '';
-  const url = `https://rss.marketingtools.apple.com/api/v2/${country}/apps/${type}/${limit}${genrePart}/apps.json`;
+  const capped = Math.min(limit, 100);
+
+  if (genre) {
+    const url =
+      `https://itunes.apple.com/${country.toLowerCase()}/rss/${LEGACY_FEED_NAME[type]}` +
+      `/limit=${capped}/genre=${genre}/json`;
+    const data = await fetchJson<LegacyFeed>(url);
+    return (data.feed.entry ?? []).map((e, i) => ({
+      position: i + 1,
+      appId: Number(e.id.attributes['im:id']),
+      title: e['im:name'].label,
+      developer: e['im:artist'].label,
+    }));
+  }
+
+  const url = `https://rss.marketingtools.apple.com/api/v2/${country}/apps/${type}/${capped}/apps.json`;
   const data = await fetchJson<RssFeed>(url);
   return data.feed.results.map((r, i) => ({
     position: i + 1,

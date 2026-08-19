@@ -1,6 +1,6 @@
 import { request } from 'undici';
 import { config } from '../config.js';
-import { nextDispatcher } from './proxy.js';
+import { dispatcherForSlot } from './proxy.js';
 
 const USER_AGENTS = [
   'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
@@ -108,7 +108,7 @@ export async function fetchJson<T = unknown>(url: string, opts: FetchOptions = {
   for (let attempt = 0; attempt < config.scrapeMaxRetries; attempt++) {
     const slot = await acquireSlot();
     try {
-      const dispatcher = nextDispatcher();
+      const dispatcher = dispatcherForSlot(slot, 'apple');
       counters.requests++;
       const res = await request(fullUrl, {
         method: 'GET',
@@ -139,7 +139,7 @@ export async function fetchText(url: string, opts: FetchOptions = {}): Promise<s
   for (let attempt = 0; attempt < config.scrapeMaxRetries; attempt++) {
     const slot = await acquireSlot();
     try {
-      const dispatcher = nextDispatcher();
+      const dispatcher = dispatcherForSlot(slot, 'apple');
       counters.requests++;
       const res = await request(fullUrl, {
         method: 'GET',

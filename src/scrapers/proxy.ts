@@ -31,23 +31,78 @@ let uCursor = 0;
 // Кулдаун прокси после сетевой ошибки: мёртвый прокси выбывает из ротации,
 // а не мучает каждый следующий запрос 10-секундным connect-таймаутом.
 const FAIL_COOLDOWN_MS = 5 * 60 * 1000;
-const failedUntil = new Map<Dispatcher, number>();
 
-/** Пометить прокси упавшим — он пропускается в ротации на время кулдауна. */
-export function reportDispatcherFailure(d: Dispatcher | undefined): void {
-  if (d) failedUntil.set(d, Date.now() + FAIL_COOLDOWN_MS);
+/**
+ * Кулдаун считается ОТДЕЛЬНО по площадкам.
+ *
+ * Раньше карта была общей, и блокировка от Google (капча на batchexecute)
+ * выводила адрес из ротации и для Apple. При активном обходе Play в кулдаун
+ * уходил весь пул, nextDispatcher возвращал undefined, и запросы к Apple шли
+ * напрямую с единственного egress-IP — оттуда и 429 сотнями. Адрес, которому
+ * не рад Google, для Apple совершенно исправен.
+ */
+export type ProxyScope = 'apple' | 'google';
+
+const failedUntil = new Map<string, number>();
+const cooldownKey = (scope: ProxyScope, idx: number): string => `${scope}|${idx}`;
+
+function indexOfAgent(d: Dispatcher | undefined): number {
+  return d ? undiciAgents.indexOf(d as ProxyAgent) : -1;
+}
+
+function isAvailable(scope: ProxyScope, idx: number): boolean {
+  return (failedUntil.get(cooldownKey(scope, idx)) ?? 0) <= Date.now();
+}
+
+/** Пометить прокси упавшим для площадки — он пропускается в её ротации. */
+export function reportDispatcherFailure(
+  d: Dispatcher | undefined, scope: ProxyScope = 'google',
+): void {
+  const idx = indexOfAgent(d);
+  if (idx >= 0) failedUntil.set(cooldownKey(scope, idx), Date.now() + FAIL_COOLDOWN_MS);
+}
+
+/** Сколько адресов сейчас в кулдауне по площадке — для /health. */
+export function proxyCooldownCount(scope: ProxyScope): number {
+  let n = 0;
+  for (let i = 0; i < undiciAgents.length; i++) if (!isAvailable(scope, i)) n++;
+  return n;
 }
 
 /**
  * Round-robin ProxyAgent для undici (или undefined → прямое соединение).
  * Прокси в кулдауне пропускаются; если весь пул в кулдауне — идём напрямую.
  */
-export function nextDispatcher(): Dispatcher | undefined {
+export function nextDispatcher(scope: ProxyScope = 'google'): Dispatcher | undefined {
   if (!undiciAgents.length) return undefined;
   for (let i = 0; i < undiciAgents.length; i++) {
-    const a = undiciAgents[uCursor % undiciAgents.length]!;
+    const idx = uCursor % undiciAgents.length;
     uCursor += 1;
-    if ((failedUntil.get(a) ?? 0) <= Date.now()) return a;
+    if (isAvailable(scope, idx)) return undiciAgents[idx]!;
+  }
+  return undefined;
+}
+
+/**
+ * Стабильный прокси для «виртуального устройства» с номером slot.
+ *
+ * Для Apple важно не просто разложить нагрузку по адресам, а сохранить
+ * связку «устройство ↔ адрес»: в запросе едет guid устройства, и когда один
+ * guid ходит с двадцати адресов, а каждый адрес показывает восемнадцать
+ * guid'ов, это выглядит ровно как то, чем является. Пин делает пару
+ * устойчивой, а штраф канала при 429 автоматически становится штрафом
+ * именно тому адресу, которому Apple сказал «хватит».
+ */
+export function dispatcherForSlot(
+  slot: number, scope: ProxyScope = 'apple',
+): Dispatcher | undefined {
+  if (!undiciAgents.length) return undefined;
+  const pinned = ((slot % undiciAgents.length) + undiciAgents.length) % undiciAgents.length;
+  if (isAvailable(scope, pinned)) return undiciAgents[pinned]!;
+  // Закреплённый адрес в кулдауне — берём любой живой, чтобы не идти напрямую.
+  for (let i = 1; i < undiciAgents.length; i++) {
+    const idx = (pinned + i) % undiciAgents.length;
+    if (isAvailable(scope, idx)) return undiciAgents[idx]!;
   }
   return undefined;
 }

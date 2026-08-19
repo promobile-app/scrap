@@ -40,7 +40,8 @@ async function fetchRpc(rpc: string, country: string, language: string): Promise
   const url = `${BATCH_URL}?hl=${language}&gl=${country}`;
   // URLEncoder.encode в апстриме кодирует пробел как '+', encodeURIComponent — как %20.
   const body = `f.req=[[${encodeURIComponent(rpc).replace(/%20/g, '+')}]]`;
-  const dispatcher = nextDispatcher();
+  const dispatcher = nextDispatcher('google');
+  let responded = false;
   try {
     const res = await request(url, {
       method: 'POST',
@@ -52,12 +53,16 @@ async function fetchRpc(rpc: string, country: string, language: string): Promise
       body,
       ...(dispatcher ? { dispatcher } : {}),
     });
+    responded = true;
     if (res.statusCode >= 400) {
       throw new Error(`batchexecute HTTP ${res.statusCode}`);
     }
     return await res.body.text();
   } catch (e) {
-    reportDispatcherFailure(dispatcher);
+    // Кулдаун — только за транспортную ошибку (адрес не отвечает). Ответ со
+    // статусом 4xx означает, что прокси исправен, а недоволен им Google —
+    // и раньше такой ответ выводил адрес из ротации ещё и для Apple.
+    if (!responded) reportDispatcherFailure(dispatcher, 'google');
     throw e;
   }
 }

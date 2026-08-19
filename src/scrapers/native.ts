@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { request } from 'undici';
 import { config } from '../config.js';
-import { nextDispatcher } from './proxy.js';
+import { dispatcherForSlot } from './proxy.js';
 
 /**
  * Нативный поиск App Store — тот же endpoint, что использует приложение
@@ -111,6 +111,11 @@ const NATIVE_UA =
 
 const SEARCH_URL = 'https://search.itunes.apple.com/WebObjects/MZSearch.woa/wa/search';
 
+// Ширина кадров превью: мокап телефона занимает ~300 CSS-пикселей, 600 хватает
+// на retina и вдвое дешевле исходных 1290 по трафику.
+const SHOT_MAX_WIDTH = 600;
+const ICON_MAX_WIDTH = 256;
+
 // --- Channel pool ----------------------------------------------------------
 // Один канал = «виртуальное устройство» со своим GUID. Round-robin между
 // каналами позволяет параллельно слать несколько запросов в Apple с
@@ -118,18 +123,23 @@ const SEARCH_URL = 'https://search.itunes.apple.com/WebObjects/MZSearch.woa/wa/s
 
 class AppleChannel {
   readonly guid: string;
+  /** Номер канала = номер закреплённого за ним прокси (см. dispatcherForSlot). */
+  readonly slot: number;
   nextSlotAt = 0;
   inFlight = 0;
 
-  constructor() {
+  constructor(slot: number) {
+    this.slot = slot;
     this.guid = randomBytes(6).toString('hex').toUpperCase();
   }
 
   async waitSlot(): Promise<void> {
     const now = Date.now();
-    const slot = Math.max(now, this.nextSlotAt);
-    this.nextSlotAt = slot + config.scrapeDelayMs;
-    if (slot > now) await sleep(slot - now);
+    // Не `slot`: так называется номер канала, и локальная переменная его
+    // затеняла бы прямо в методе, где важны оба.
+    const at = Math.max(now, this.nextSlotAt);
+    this.nextSlotAt = at + config.scrapeDelayMs;
+    if (at > now) await sleep(at - now);
   }
 
   /** При 429/403 — увеличенный backoff на этом канале, чтобы притормозить
@@ -143,7 +153,9 @@ class AppleChannel {
 }
 
 const CHANNEL_COUNT = Number(process.env.APPLE_CHANNELS ?? 6);
-const CHANNELS: AppleChannel[] = Array.from({ length: CHANNEL_COUNT }, () => new AppleChannel());
+const CHANNELS: AppleChannel[] = Array.from(
+  { length: CHANNEL_COUNT }, (_, i) => new AppleChannel(i),
+);
 
 // Round-robin: берём канал с минимальным inFlight, чтобы нагрузка
 // распределялась равномерно (а не «канал 0, канал 0, канал 1, ...»).
@@ -239,8 +251,9 @@ export async function nativeSearchIds(
         Accept: 'application/json',
       };
 
-      // Один прокси на весь запрос (включая редирект-хопы) — round-robin по пулу.
-      const dispatcher = nextDispatcher();
+      // Один прокси на весь запрос (включая редирект-хопы), закреплённый за
+      // каналом: guid устройства и адрес должны быть устойчивой парой.
+      const dispatcher = dispatcherForSlot(channel.slot, 'apple');
       nativeCounters.requests++;
       const reqOpts = dispatcher ? { method: 'GET' as const, headers, dispatcher } : { method: 'GET' as const, headers };
       // MZSearch отвечает 302 на MZStore — следуем за редиректом вручную.
@@ -287,12 +300,33 @@ export async function nativeSearchIds(
 const appPageUrl = (country: string, appId: string | number): string =>
   `https://apps.apple.com/${country.toLowerCase()}/app/id${appId}`;
 
+/** Артворк витрины: URL — шаблон вида `.../{w}x{h}bb.{f}`. */
+interface NativeArtwork {
+  url?: string;
+  width?: number;
+  height?: number;
+  bgColor?: string;
+}
+
 interface NativeAppPageResponse {
   storePlatformData?: {
     'product-dv'?: { results?: Record<string, {
       genreNames?: string[];
       subtitle?: string;
       name?: string;
+      artistName?: string;
+      iconArtwork?: NativeArtwork;
+      artwork?: NativeArtwork;
+      // Скриншоты разложены по классам устройств: iphone_d74, iphone_6_5,
+      // iphone6+, ipadPro_2018, appleWatch_2021 — витрина показывает тот набор,
+      // который подходит устройству пользователя.
+      screenshotsByType?: Record<string, NativeArtwork[]>;
+      videoPreviewByType?: Record<string, { video?: string; previewFrame?: NativeArtwork }>;
+      offers?: Array<{
+        actionText?: { short?: string; medium?: string; long?: string };
+        priceFormatted?: string;
+        price?: number;
+      }>;
     }> };
   };
   pageData?: {
@@ -300,6 +334,36 @@ interface NativeAppPageResponse {
     customersAlsoBoughtApps?: string[];
     moreByThisDeveloper?: string[];
   };
+}
+
+/** Кадр витрины — скриншот или постер трейлера, с готовым URL. */
+export interface NativeStoreShot {
+  url: string;
+  width: number;
+  height: number;
+  /** Фон кадра, посчитанный самой Apple — под него красится рамка мокапа. */
+  bgColor: string | null;
+}
+
+/**
+ * Витрина приложения так, как её видит устройство: то, из чего собирается
+ * превью карточки в App Store (иконка, подпись кнопки, скриншоты по классам
+ * устройств, трейлеры).
+ */
+export interface NativeStorePreview {
+  icon: string | null;
+  name: string;
+  subtitle: string;
+  developer: string;
+  genres: string[];
+  /** Локализованная надпись кнопки установки: «GET», «Купити», «Laden». */
+  actionLabel: string | null;
+  /** Цена так, как её печатает витрина («$0.00», «149,00 ₴»). */
+  priceFormatted: string | null;
+  /** Скриншоты по классам устройств Apple (iphone_d74, ipadPro_2018, …). */
+  screenshots: Record<string, NativeStoreShot[]>;
+  /** Трейлеры по тем же классам: HLS-поток и его постер. */
+  videos: Record<string, { video: string; poster: NativeStoreShot | null }>;
 }
 
 /** Нишевый контекст приложения глазами самого App Store. */
@@ -313,6 +377,39 @@ export interface NativeAppPage {
    * топ категории. Точнее и дешевле, чем поиск конкурентов по своему названию.
    */
   relatedIds: string[];
+  /** Другие приложения того же разработчика — блок «More by this developer». */
+  developerIds: string[];
+  /**
+   * Витрина для превью карточки. Собирается из того же ответа — отдельных
+   * запросов не стоит, поэтому приходит всегда.
+   */
+  preview: NativeStorePreview;
+}
+
+/**
+ * Подставляет размеры в шаблон артворка (`.../{w}x{h}bb.{f}`). Apple отдаёт
+ * placeholder'ы, а не готовый URL: ширину выбирает потребитель. Ограничиваем
+ * `maxWidth`, чтобы в превью не тянуть исходные 1290×2796 на каждый кадр.
+ */
+function expandArtwork(art: NativeArtwork | undefined, maxWidth: number): NativeStoreShot | null {
+  if (!art?.url) return null;
+
+  const width = Math.min(art.width || maxWidth, maxWidth);
+  const ratio = art.width && art.height ? art.height / art.width : 0;
+  const height = ratio ? Math.round(width * ratio) : width;
+
+  return {
+    // `{c}` — код кропа, для скриншотов и иконок он не нужен: `bb` (bounding
+    // box) уже вписывает кадр в запрошенный прямоугольник.
+    url: art.url
+      .replace('{w}', String(width))
+      .replace('{h}', String(height))
+      .replace('{c}', 'bb')
+      .replace('{f}', 'webp'),
+    width,
+    height,
+    bgColor: art.bgColor ? `#${art.bgColor}` : null,
+  };
 }
 
 /**
@@ -341,7 +438,7 @@ export async function nativeAppPage(
   for (let attempt = 0; attempt < config.scrapeMaxRetries; attempt++) {
     const channel = await acquireChannel();
     try {
-      const dispatcher = nextDispatcher();
+      const dispatcher = dispatcherForSlot(channel.slot, 'apple');
       nativeCounters.requests++;
       const reqOpts = dispatcher
         ? { method: 'GET' as const, headers, dispatcher }
@@ -357,10 +454,43 @@ export async function nativeAppPage(
         ...(body.pageData?.customersAlsoBoughtApps ?? []),
         ...(body.pageData?.topApps?.iphone?.ids ?? []),
       ];
+      const screenshots: NativeStorePreview['screenshots'] = {};
+      for (const [device, shots] of Object.entries(product.screenshotsByType ?? {})) {
+        const frames = (shots ?? [])
+          .map((shot) => expandArtwork(shot, SHOT_MAX_WIDTH))
+          .filter((shot): shot is NativeStoreShot => shot !== null);
+        if (frames.length) screenshots[device] = frames;
+      }
+
+      const videos: NativeStorePreview['videos'] = {};
+      for (const [device, preview] of Object.entries(product.videoPreviewByType ?? {})) {
+        if (!preview?.video) continue;
+        videos[device] = {
+          video: preview.video,
+          poster: expandArtwork(preview.previewFrame, SHOT_MAX_WIDTH),
+        };
+      }
+
+      const offer = product.offers?.[0];
+
       return {
         genreNames: product.genreNames ?? [],
         subtitle: product.subtitle ?? '',
         relatedIds: [...new Set(related)].filter((id) => id !== String(appId)),
+        developerIds: [...new Set(body.pageData?.moreByThisDeveloper ?? [])].filter(
+          (id) => id !== String(appId),
+        ),
+        preview: {
+          icon: expandArtwork(product.iconArtwork ?? product.artwork, ICON_MAX_WIDTH)?.url ?? null,
+          name: product.name ?? '',
+          subtitle: product.subtitle ?? '',
+          developer: product.artistName ?? '',
+          genres: product.genreNames ?? [],
+          actionLabel: offer?.actionText?.short ?? offer?.actionText?.medium ?? null,
+          priceFormatted: offer?.priceFormatted ?? null,
+          screenshots,
+          videos,
+        },
       };
     } catch (err) {
       lastErr = err;

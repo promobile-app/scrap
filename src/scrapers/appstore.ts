@@ -7,6 +7,13 @@ const ITUNES = 'https://itunes.apple.com';
 const STOREFRONT = 'https://search.itunes.apple.com/WebObjects/MZSearchHints.woa/wa/hints';
 const STORE_SEARCH = 'https://itunes.apple.com/search';
 
+// История версий есть только в HTML страницы приложения: ни iTunes lookup, ни
+// itml-ответ нативного клиента её не содержат. Адрес берём из lookup
+// (trackViewUrl) — короткий /app/id<N> отвечает 301 на канонический URL со
+// слагом, а undici за редиректами сам не ходит.
+const WEB_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36';
+
 export interface AppInfo {
   appId: number;
   bundleId: string;
@@ -107,6 +114,71 @@ function appCacheSet(country: string, info: AppInfo): void {
     if (oldest !== undefined) appInfoCache.delete(oldest);
   }
   appInfoCache.set(`${country}|${info.appId}`, { value: info, expires: Date.now() + APP_INFO_TTL_MS });
+}
+
+export interface AppVersion {
+  version: string;
+  /** ISO-строка даты релиза. */
+  releasedAt: string | null;
+  notes: string;
+}
+
+// История версий меняется только с новым релизом — TTL тот же, что у метаданных.
+const versionsCache = new Map<string, { value: AppVersion[]; expires: number }>();
+
+// Элементы shelf'а версий: "primarySubtitle" — номер, "secondarySubtitle" — дата.
+const VERSION_ITEM_RE =
+  /"text":"((?:[^"\\]|\\.)*)","style":"detail","wantsCollapsedNewlines":\w+,"primarySubtitle":"([^"]+)","secondarySubtitle":"([^"]+)"/g;
+
+const unescapeJson = (value: string): string => {
+  try {
+    return JSON.parse(`"${value}"`) as string;
+  } catch {
+    return value;
+  }
+};
+
+/**
+ * История версий приложения: номер, дата релиза и changelog каждого обновления.
+ *
+ * Единственный источник — HTML страницы приложения: публичный lookup отдаёт
+ * только текущую версию, а в itml-ответе нативного клиента истории нет вовсе.
+ * Парсим не всю страницу, а конкретный shelf, поэтому смена вёрстки Apple
+ * ломает максимум эту одну функцию — она вернёт пустой список, а не мусор.
+ */
+export async function appVersionHistory(
+  appId: number | string,
+  country = config.defaultCountry,
+): Promise<AppVersion[]> {
+  const key = `${country.toLowerCase()}|${appId}`;
+  const cached = versionsCache.get(key);
+  if (cached && Date.now() <= cached.expires) return cached.value;
+
+  const info = await appLookup(Number(appId), country);
+  if (!info?.url) return [];
+
+  const html = await fetchText(info.url, {
+    headers: { 'User-Agent': WEB_UA, Accept: 'text/html' },
+  });
+
+  const seen = new Set<string>();
+  const versions: AppVersion[] = [];
+
+  for (const match of html.matchAll(VERSION_ITEM_RE)) {
+    const version = unescapeJson(match[2]).replace(/^Version\s+/i, '').trim();
+    if (!version || seen.has(version)) continue;
+    seen.add(version);
+
+    const date = new Date(unescapeJson(match[3]));
+    versions.push({
+      version,
+      releasedAt: Number.isNaN(date.getTime()) ? null : date.toISOString(),
+      notes: unescapeJson(match[1]),
+    });
+  }
+
+  versionsCache.set(key, { value: versions, expires: Date.now() + APP_INFO_TTL_MS });
+  return versions;
 }
 
 /**

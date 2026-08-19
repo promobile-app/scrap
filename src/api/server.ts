@@ -6,17 +6,24 @@ import fastifyCors from '@fastify/cors';
 import fastifyRateLimit from '@fastify/rate-limit';
 import { config } from '../config.js';
 import { query } from '../db/pool.js';
-import { appLookup, searchApps, getRank, lookupApps } from '../scrapers/appstore.js';
-import { nativeSearchIds, storeLanguages, getNativePoolStats } from '../scrapers/native.js';
+import {
+  appLookup,
+  searchApps,
+  getRank,
+  lookupApps,
+  lookupAppsCached,
+  appVersionHistory,
+} from '../scrapers/appstore.js';
+import { nativeSearchIds, storeLanguages, getNativePoolStats, nativeAppPage } from '../scrapers/native.js';
 import { getHttpPoolStats } from '../scrapers/http.js';
-import { proxyCount, proxyEnabled } from '../scrapers/proxy.js';
+import { proxyCooldownCount, proxyCount, proxyEnabled } from '../scrapers/proxy.js';
 import { gpSearch, gpAppLookup, gpTopChart, langOf } from '../scrapers/googleplay.js';
 import { gpRpcSearch } from '../scrapers/gplayRpc.js';
 import { finskyDetails } from '../scrapers/finsky/details.js';
 import { finskyConfigured, finskySession } from '../scrapers/finsky/session.js';
 import { gpEstimateVolume } from '../analytics/googleplay/volume.js';
 import { gpEstimateDifficulty } from '../analytics/googleplay/difficulty.js';
-import { topChart } from '../scrapers/charts.js';
+import { topChart, type ChartType } from '../scrapers/charts.js';
 import { estimateVolume, getAsaSourceStatus } from '../analytics/appstore/volume.js';
 import { estimateDifficulty } from '../analytics/appstore/difficulty.js';
 import { discoverKeywordsCached } from '../analytics/discoveryCache.js';
@@ -414,6 +421,198 @@ app.get<{
   }
 });
 
+/**
+ * Витрина приложения глазами нативного клиента App Store: subtitle (в публичном
+ * iTunes lookup его нет вообще), жанры на языке витрины и два готовых списка
+ * соседей — «покупают также» и другие приложения разработчика.
+ *
+ * Один запрос закрывает три блока App Profile / ASO Report, поэтому карточки
+ * соседей резолвятся здесь же батчем через кэширующий lookup.
+ */
+app.get<{
+  Params: { id: string };
+  Querystring: {
+    country?: string;
+    language?: string;
+    limit?: string;
+    withSubtitles?: string;
+    withPreview?: string;
+  };
+}>('/apps/:id/listing', async (req, reply) => {
+  const country = req.query.country ?? config.defaultCountry;
+  const limit = Math.min(Number(req.query.limit) || 10, 25);
+  // The store preview (screenshots per device class, trailers) rides on the same
+  // product page, so it costs no extra request — but it is a few dozen KB of
+  // URLs the app-profile card never reads. Opt-in, like the subtitles below.
+  const withPreview = req.query.withPreview === 'true' || req.query.withPreview === '1';
+  // Subtitles of neighbours cost one product-page request each, so they are
+  // opt-in: the app-profile card does not need them, the comparison table does.
+  const withSubtitles = req.query.withSubtitles === 'true' || req.query.withSubtitles === '1';
+
+  try {
+    const page = await nativeAppPage(req.params.id, country, req.query.language);
+    if (!page) return reply.code(404).send({ error: 'app not found' });
+
+    const [similar, moreByDeveloper] = await Promise.all([
+      lookupAppsCached(page.relatedIds.slice(0, limit), country),
+      lookupAppsCached(page.developerIds.slice(0, limit), country),
+    ]);
+
+    const card = (a: {
+      appId: number;
+      title: string;
+      icon: string;
+      developer: string;
+      rating: number;
+      ratingCount: number;
+      primaryGenre: string;
+    }) => ({
+      appId: String(a.appId),
+      title: a.title,
+      icon: a.icon,
+      developer: a.developer,
+      score: a.rating || null,
+      ratings: a.ratingCount || null,
+      genre: a.primaryGenre,
+      subtitle: null as string | null,
+    });
+
+    const similarCards = similar.map(card);
+
+    if (withSubtitles) {
+      // One page per competitor, in parallel; a failed one keeps a null subtitle
+      // rather than failing the whole comparison.
+      const subtitles = await Promise.all(
+        similarCards.map((c) =>
+          nativeAppPage(c.appId, country, req.query.language)
+            .then((p) => p?.subtitle || null)
+            .catch(() => null),
+        ),
+      );
+      similarCards.forEach((c, i) => {
+        c.subtitle = subtitles[i];
+      });
+    }
+
+    return {
+      appId: req.params.id,
+      subtitle: page.subtitle || null,
+      genres: page.genreNames,
+      similar: similarCards,
+      moreByDeveloper: moreByDeveloper.map(card),
+      preview: withPreview ? page.preview : null,
+    };
+  } catch (e) {
+    req.log.error({ err: e }, 'app listing failed');
+    return reply.code(502).send({ error: 'store unavailable' });
+  }
+});
+
+/**
+ * Позиция приложения в чартах прямо сейчас: общий чарт витрины и чарт его
+ * категории. Оба фида отдают сотню позиций, дальше приложение считается вне
+ * чарта (null), а не «где-то там».
+ */
+async function currentChartPosition(
+  appId: number,
+  country: string,
+  chartType: ChartType,
+): Promise<{
+  overall: number | null;
+  category: number | null;
+  genreId: number | null;
+  genreName: string | null;
+}> {
+  const info = await appLookup(appId, country);
+  const genreId = info?.primaryGenreId ?? null;
+
+  const [overallChart, categoryChart] = await Promise.all([
+    topChart(chartType, country),
+    genreId ? topChart(chartType, country, genreId) : Promise.resolve([]),
+  ]);
+
+  return {
+    overall: overallChart.find((e) => e.appId === appId)?.position ?? null,
+    category: categoryChart.find((e) => e.appId === appId)?.position ?? null,
+    genreId,
+    genreName: info?.primaryGenre ?? null,
+  };
+}
+
+/**
+ * История позиций приложения в топ-чартах: общий чарт витрины и чарт категории.
+ * Наполняется планировщиком (CHART_COUNTRIES), поэтому пустой ответ означает
+ * «снимков ещё нет», а не ошибку.
+ */
+app.get<{
+  Params: { id: string };
+  Querystring: { country?: string; days?: string; chartType?: string };
+}>('/apps/:id/charts', async (req) => {
+  const country = (req.query.country ?? config.defaultCountry).toLowerCase();
+  const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365);
+  const chartType = req.query.chartType ?? 'top-free';
+
+  const rows = await query<{
+    genreId: number | null;
+    position: number | null;
+    capturedAt: string;
+  }>(
+    `SELECT genre_id AS "genreId", position, captured_at AS "capturedAt"
+       FROM chart_snapshots
+      WHERE app_id = $1 AND lower(country) = $2 AND chart_type = $3
+        AND captured_at >= now() - ($4 || ' days')::interval
+      ORDER BY captured_at ASC`,
+    [Number(req.params.id), country, chartType, String(days)],
+  );
+
+  // Текущая позиция снимается вживую, а не берётся из истории: снимки копятся
+  // с момента включения сбора по гео, и без этого раздел был бы пустым ровно
+  // там, где ответ на «где я сейчас» есть в один запрос к фиду Apple.
+  const current = await currentChartPosition(
+    Number(req.params.id),
+    country,
+    chartType as ChartType,
+  ).catch((e) => {
+    req.log.error({ err: e }, 'current chart position failed');
+    return { overall: null, category: null, genreId: null, genreName: null };
+  });
+
+  // Общий чарт и чарт категории — две линии одного графика.
+  return {
+    appId: req.params.id,
+    country,
+    chartType,
+    current,
+    overall: rows
+      .filter((r) => r.genreId == null)
+      .map((r) => ({ position: r.position, capturedAt: r.capturedAt })),
+    category: rows
+      .filter((r) => r.genreId != null)
+      .map((r) => ({ genreId: r.genreId, position: r.position, capturedAt: r.capturedAt })),
+  };
+});
+
+/**
+ * История версий приложения: номер, дата и changelog каждого релиза.
+ * Источник — HTML страницы приложения (см. appVersionHistory), ответ кэшируется
+ * на стороне скрапера.
+ */
+app.get<{
+  Params: { id: string };
+  Querystring: { country?: string; limit?: string };
+}>('/apps/:id/versions', async (req, reply) => {
+  const country = req.query.country ?? config.defaultCountry;
+  const limit = Math.min(Number(req.query.limit) || 25, 100);
+
+  try {
+    const versions = await appVersionHistory(req.params.id, country);
+    return { appId: req.params.id, country, versions: versions.slice(0, limit) };
+  } catch (e) {
+    req.log.error({ err: e }, 'version history failed');
+    return reply.code(502).send({ error: 'store unavailable' });
+  }
+});
+
 // Отслеживаемые ключи приложения + последний rank.
 app.get<{ Params: { id: string } }>('/apps/:id/keywords', async (req) => {
   return query(
@@ -734,7 +933,16 @@ app.get('/health/apple', async () => {
   const pools = () => ({
     native: getNativePoolStats(),
     http: getHttpPoolStats(),
-    proxies: { enabled: proxyEnabled(), count: proxyCount() },
+    // cooldown по площадкам: если apple близок к count — пул выбит и запросы
+    // уходят напрямую с одного egress-IP, а это гарантированные 429 от Apple.
+    proxies: {
+      enabled: proxyEnabled(),
+      count: proxyCount(),
+      cooldown: {
+        apple: proxyCooldownCount('apple'),
+        google: proxyCooldownCount('google'),
+      },
+    },
   });
   try {
     const ids = await nativeSearchIds('test', 'us');
