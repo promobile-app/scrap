@@ -11,7 +11,8 @@
     "scheduler": "tsx src/jobs/scheduler.ts",
     "db:migrate": "tsx src/db/migrate.ts",
     "import-xlsx": "tsx src/importXlsx.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "postinstall": "playwright install --with-deps chromium"
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",
