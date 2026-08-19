@@ -30,6 +30,18 @@ const CONCURRENCY = Number(process.env.STOREFRONT_SHOT_CONCURRENCY ?? 3);
 /** Браузер закрывается после простоя, чтобы не держать ~200 МБ впустую. */
 const IDLE_CLOSE_MS = Number(process.env.STOREFRONT_SHOT_IDLE_MS ?? 5 * 60 * 1000);
 
+/**
+ * Почему кадра нет. Две причины, и путать их нельзя: «в этой витрине
+ * приложения нет» — это факт о приложении, а «не отрендерилось» — наша
+ * проблема, и показывать её как факт о приложении значит врать.
+ */
+export type StorefrontMissReason = 'unavailable' | 'error';
+
+export interface StorefrontMiss {
+  country: string;
+  reason: StorefrontMissReason;
+}
+
 export interface StorefrontShot {
   country: string;
   language: string | null;
@@ -107,13 +119,14 @@ export interface StorefrontShotOptions {
 }
 
 /**
- * Снимает одну витрину. Возвращает null, если страница не открылась: витрина
- * без приложения — нормальный ответ (приложение просто не издано в этой
- * стране), а не ошибка всего запроса.
+ * Снимает одну витрину. Вместо кадра может вернуться `StorefrontMiss`: витрина
+ * без приложения (`unavailable`) — нормальный ответ, а не ошибка всего
+ * запроса; сбой рендера (`error`) — отдельная причина, чтобы клиент не выдал
+ * её за отсутствие приложения в стране.
  */
 export async function storefrontShot(
   opts: StorefrontShotOptions,
-): Promise<StorefrontShot | null> {
+): Promise<StorefrontShot | StorefrontMiss> {
   const {
     appId,
     country,
@@ -160,7 +173,10 @@ export async function storefrontShot(
         waitUntil: 'domcontentloaded',
         timeout: 30_000,
       });
-      if (!response || response.status() >= 400) return null;
+      // Приложения нет в этой витрине — Apple отвечает 404 на её адрес.
+      if (!response || response.status() >= 400) {
+        return { country, reason: 'unavailable' };
+      }
 
       // Скриншоты витрины подгружаются лениво; ждём галерею, но не жёстко —
       // у приложения без скриншотов её не будет, а карточка всё равно нужна.
@@ -186,10 +202,9 @@ export async function storefrontShot(
       await context.close().catch(() => undefined);
     }
   } catch (err) {
-    if (!config.isProduction) {
-      console.warn(`[storefront] ${country}/${appId} не снялась: ${String(err)}`);
-    }
-    return null;
+    // Таймаут, упавший браузер, сеть — это наш сбой, а не факт о приложении.
+    console.warn(`[storefront] ${country}/${appId} не снялась: ${String(err)}`);
+    return { country, reason: 'error' };
   } finally {
     releaseSlot();
     scheduleIdleClose();
@@ -201,7 +216,7 @@ export async function storefrontShots(
   appId: string | number,
   countries: string[],
   opts: Omit<StorefrontShotOptions, 'appId' | 'country'> = {},
-): Promise<Array<StorefrontShot | null>> {
+): Promise<Array<StorefrontShot | StorefrontMiss>> {
   return Promise.all(
     countries.map((country) => storefrontShot({ ...opts, appId, country })),
   );
