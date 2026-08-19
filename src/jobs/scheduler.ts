@@ -1,9 +1,20 @@
 import { recheckAll } from './recheck.js';
+import { collectCharts } from './collect.js';
 import { sendDigests } from './digest.js';
 import { seedGeoCorpus } from '../analytics/corpusSeeder.js';
 import { pool } from '../db/pool.js';
 
 const RECHECK_MS = 3 * 60 * 60 * 1000; // каждые 3 часа
+
+// Снимки позиций в топ-чартах. Витрины задаются списком: чарт — это страна,
+// и снимать его «для всех» бессмысленно, нужны те гео, по которым смотрят
+// отчёты. Пустой список = сбор выключен.
+const CHART_COUNTRIES = (process.env.CHART_COUNTRIES ?? '')
+  .split(',')
+  .map((c) => c.trim().toLowerCase())
+  .filter(Boolean);
+// Чарты Apple пересчитываются раз в сутки, чаще снимать нечего.
+const CHART_INTERVAL_MS = Number(process.env.CHART_INTERVAL_MS ?? 12 * 60 * 60 * 1000);
 
 // Затравка словаря по витринам. Пустой список = выключено: задача надолго
 // занимает пул каналов, и включать её надо осознанно, под конкретные гео.
@@ -38,9 +49,29 @@ async function seedCycle(): Promise<void> {
   await seedGeoCorpus(country).catch((e) => console.error('seed failed:', e));
 }
 
+/** Снимки позиций в чартах по каждой настроенной витрине. */
+async function chartCycle(): Promise<void> {
+  for (const country of CHART_COUNTRIES) {
+    const saved = await collectCharts(country).catch((e) => {
+      console.error(`charts ${country} failed:`, e);
+      return 0;
+    });
+    console.log(`[charts] ${country}: сохранено снимков ${saved}`);
+  }
+}
+
 async function main(): Promise<void> {
   await cycle();
   setInterval(() => { void cycle(); }, RECHECK_MS);
+
+  if (CHART_COUNTRIES.length) {
+    console.log(
+      `[charts] расписание: ${CHART_COUNTRIES.join(', ')} — каждые ` +
+      `${Math.round(CHART_INTERVAL_MS / 60000)} мин`,
+    );
+    void chartCycle();
+    setInterval(() => { void chartCycle(); }, CHART_INTERVAL_MS);
+  }
 
   if (SEED_COUNTRIES.length) {
     console.log(
