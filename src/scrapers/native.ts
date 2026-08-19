@@ -327,6 +327,13 @@ interface NativeAppPageResponse {
         priceFormatted?: string;
         price?: number;
       }>;
+      // Оценка витрины: value Apple округляет до половины звезды, count — точный.
+      userRating?: { value?: number; ratingCount?: number };
+      // Возрастной рейтинг по системам; appsApple.name — то самое «12+».
+      contentRatingsBySystem?: { appsApple?: { name?: string } };
+      // Размер по моделям устройств: iPhone14,3 → байты.
+      fileSizeByDevice?: Record<string, number>;
+      softwareInfo?: { seller?: string; languagesDisplayString?: string };
     }> };
   };
   pageData?: {
@@ -360,6 +367,17 @@ export interface NativeStorePreview {
   actionLabel: string | null;
   /** Цена так, как её печатает витрина («$0.00», «149,00 ₴»). */
   priceFormatted: string | null;
+  /** Оценка витрины: звёздность с точностью до половины звезды и число оценок. */
+  ratingValue: number | null;
+  ratingCount: number | null;
+  /** Возрастной рейтинг витрины: «12+», «4+». */
+  ageRating: string | null;
+  /** Правообладатель (строка Supplier на карточке) — в iTunes lookup его нет. */
+  seller: string | null;
+  /** Языки витрины одной строкой: «English, Afrikaans, …». */
+  languages: string | null;
+  /** Размер сборки для iPhone, в байтах. */
+  sizeBytes: number | null;
   /** Скриншоты по классам устройств Apple (iphone_d74, ipadPro_2018, …). */
   screenshots: Record<string, NativeStoreShot[]>;
   /** Трейлеры по тем же классам: HLS-поток и его постер. */
@@ -473,6 +491,13 @@ export async function nativeAppPage(
 
       const offer = product.offers?.[0];
 
+      // Размер приходит по каждой модели отдельно; карточка показывает сборку
+      // для iPhone, поэтому берём максимум по айфонам (Watch/Mac-сборки мельче
+      // и крупнее соответственно и сбили бы цифру).
+      const iphoneSizes = Object.entries(product.fileSizeByDevice ?? {})
+        .filter(([model]) => model.startsWith('iPhone'))
+        .map(([, size]) => size);
+
       return {
         genreNames: product.genreNames ?? [],
         subtitle: product.subtitle ?? '',
@@ -488,6 +513,12 @@ export async function nativeAppPage(
           genres: product.genreNames ?? [],
           actionLabel: offer?.actionText?.short ?? offer?.actionText?.medium ?? null,
           priceFormatted: offer?.priceFormatted ?? null,
+          ratingValue: product.userRating?.value ?? null,
+          ratingCount: product.userRating?.ratingCount ?? null,
+          ageRating: product.contentRatingsBySystem?.appsApple?.name ?? null,
+          seller: product.softwareInfo?.seller ?? null,
+          languages: product.softwareInfo?.languagesDisplayString ?? null,
+          sizeBytes: iphoneSizes.length ? Math.max(...iphoneSizes) : null,
           screenshots,
           videos,
         },
