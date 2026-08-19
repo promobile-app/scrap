@@ -321,6 +321,8 @@ export interface NativeAppPage {
    * топ категории. Точнее и дешевле, чем поиск конкурентов по своему названию.
    */
   relatedIds: string[];
+  /** Другие приложения того же разработчика — блок «More by this developer». */
+  developerIds: string[];
 }
 
 /**
@@ -369,6 +371,9 @@ export async function nativeAppPage(
         genreNames: product.genreNames ?? [],
         subtitle: product.subtitle ?? '',
         relatedIds: [...new Set(related)].filter((id) => id !== String(appId)),
+        developerIds: [...new Set(body.pageData?.moreByThisDeveloper ?? [])].filter(
+          (id) => id !== String(appId),
+        ),
       };
     } catch (err) {
       lastErr = err;
