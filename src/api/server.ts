@@ -436,10 +436,15 @@ app.get<{
     language?: string;
     limit?: string;
     withSubtitles?: string;
+    withPreview?: string;
   };
 }>('/apps/:id/listing', async (req, reply) => {
   const country = req.query.country ?? config.defaultCountry;
   const limit = Math.min(Number(req.query.limit) || 10, 25);
+  // The store preview (screenshots per device class, trailers) rides on the same
+  // product page, so it costs no extra request — but it is a few dozen KB of
+  // URLs the app-profile card never reads. Opt-in, like the subtitles below.
+  const withPreview = req.query.withPreview === 'true' || req.query.withPreview === '1';
   // Subtitles of neighbours cost one product-page request each, so they are
   // opt-in: the app-profile card does not need them, the comparison table does.
   const withSubtitles = req.query.withSubtitles === 'true' || req.query.withSubtitles === '1';
@@ -495,6 +500,7 @@ app.get<{
       genres: page.genreNames,
       similar: similarCards,
       moreByDeveloper: moreByDeveloper.map(card),
+      preview: withPreview ? page.preview : null,
     };
   } catch (e) {
     req.log.error({ err: e }, 'app listing failed');
