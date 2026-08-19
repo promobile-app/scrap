@@ -11,3 +11,6 @@ public-key.pem
 
 # Finsky — gsfId и токены аккаунта Google, по сути учётка
 .finsky-state*
+
+# Кэш скриншотов витрин — генерится на лету, живёт сутки
+public/storefronts/

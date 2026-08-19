@@ -15,6 +15,7 @@ import {
   appVersionHistory,
 } from '../scrapers/appstore.js';
 import { nativeSearchIds, storeLanguages, getNativePoolStats, nativeAppPage } from '../scrapers/native.js';
+import { storefrontShots } from '../scrapers/storefrontShot.js';
 import { getHttpPoolStats } from '../scrapers/http.js';
 import { proxyCooldownCount, proxyCount, proxyEnabled } from '../scrapers/proxy.js';
 import { gpSearch, gpAppLookup, gpTopChart, langOf } from '../scrapers/googleplay.js';
@@ -506,6 +507,52 @@ app.get<{
     req.log.error({ err: e }, 'app listing failed');
     return reply.code(502).send({ error: 'store unavailable' });
   }
+});
+
+/**
+ * Витрины приложения пачкой: страница App Store, снятая headless-браузером в
+ * мобильном вьюпорте, по одной картинке на страну.
+ *
+ * Смысл ровно в пачке: одну витрину проще открыть в браузере, а вот увидеть
+ * десять стран рядом — иначе никак. Кадры кэшируются на сутки и раздаются
+ * статикой, так что повторный просмотр ничего не стоит.
+ */
+app.get<{
+  Params: { id: string };
+  Querystring: {
+    countries?: string;
+    language?: string;
+    full?: string;
+    refresh?: string;
+    width?: string;
+    height?: string;
+  };
+}>('/apps/:id/storefronts', async (req, reply) => {
+  const countries = (req.query.countries ?? config.defaultCountry)
+    .split(',')
+    .map((c) => c.trim().toLowerCase())
+    .filter(Boolean)
+    // Каждая страна — это рендер страницы; двенадцать за запрос уже около
+    // минуты холодного времени, дальше начинается таймаут клиента.
+    .slice(0, 12);
+
+  if (!countries.length) return reply.code(400).send({ error: 'countries required' });
+
+  const shots = await storefrontShots(req.params.id, countries, {
+    language: req.query.language,
+    fullPage: req.query.full === 'true' || req.query.full === '1',
+    refresh: req.query.refresh === 'true' || req.query.refresh === '1',
+    width: Number(req.query.width) || undefined,
+    height: Number(req.query.height) || undefined,
+  });
+
+  return {
+    appId: req.params.id,
+    shots: shots.filter((shot) => shot !== null),
+    // Витрина без приложения — обычное дело (не издано в стране), поэтому это
+    // часть ответа, а не ошибка.
+    unavailable: countries.filter((_, i) => shots[i] === null),
+  };
 });
 
 /**
