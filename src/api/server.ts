@@ -15,7 +15,7 @@ import {
   appVersionHistory,
 } from '../scrapers/appstore.js';
 import { nativeSearchIds, storeLanguages, getNativePoolStats, nativeAppPage } from '../scrapers/native.js';
-import { storefrontShots } from '../scrapers/storefrontShot.js';
+import { storefrontShots, type StorefrontShot } from '../scrapers/storefrontShot.js';
 import { getHttpPoolStats } from '../scrapers/http.js';
 import { proxyCooldownCount, proxyCount, proxyEnabled } from '../scrapers/proxy.js';
 import { gpSearch, gpAppLookup, gpTopChart, langOf } from '../scrapers/googleplay.js';
@@ -546,12 +546,22 @@ app.get<{
     height: Number(req.query.height) || undefined,
   });
 
+  const isShot = (shot: (typeof shots)[number]): shot is StorefrontShot =>
+    'image' in shot;
+
   return {
     appId: req.params.id,
-    shots: shots.filter((shot) => shot !== null),
+    shots: shots.filter(isShot),
     // Витрина без приложения — обычное дело (не издано в стране), поэтому это
     // часть ответа, а не ошибка.
-    unavailable: countries.filter((_, i) => shots[i] === null),
+    unavailable: shots
+      .filter((shot) => !isShot(shot) && shot.reason === 'unavailable')
+      .map((shot) => shot.country),
+    // А вот это уже наш сбой: рендер не удался. Клиент должен показать его как
+    // ошибку, а не как «приложения нет в стране».
+    failed: shots
+      .filter((shot) => !isShot(shot) && shot.reason === 'error')
+      .map((shot) => shot.country),
   };
 });
 
