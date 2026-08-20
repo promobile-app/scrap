@@ -211,7 +211,11 @@ export async function searchApps(
   limit = 50,
 ): Promise<AppInfo[]> {
   const ids = await nativeSearchIds(term, country);
-  return lookupApps(ids.slice(0, limit), country);
+  // Через кэш, а не напрямую: метаданные полусотни приложений — это 121 КБ
+  // даже со сжатием, восемь девятых всего трафика пересчёта, и качались они
+  // заново на каждый ключ. А топ выдачи между ключами повторяется: по
+  // «casino», «poker» и «slots» половина позиций одна и та же.
+  return lookupAppsCached(ids.slice(0, limit), country);
 }
 
 /**
