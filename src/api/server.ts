@@ -10,7 +10,6 @@ import {
   appLookup,
   searchApps,
   getRank,
-  lookupApps,
   lookupAppsCached,
   appVersionHistory,
 } from '../scrapers/appstore.js';
@@ -194,7 +193,7 @@ app.get<{
 
     const idx = ids.indexOf(String(appId));
     const iRank = idx === -1 ? null : idx + 1;
-    const topApps = await lookupApps(ids.slice(0, 10), country);
+    const topApps = await lookupAppsCached(ids.slice(0, 10), country);
     await saveMetricCheck({
       platform: 'ios', appId: String(appId), appTitle: app.title,
       term: term.toLowerCase().trim(), country,
@@ -918,7 +917,7 @@ app.get<{ Querystring: { term?: string; country?: string; platform?: string; app
         };
       }
       const ids = await nativeSearchIds(term, country);
-      const top = await lookupApps(ids.slice(0, LIMIT), country);
+      const top = await lookupAppsCached(ids.slice(0, LIMIT), country);
       const byId = new Map(top.map((a) => [String(a.appId), a.title]));
       return {
         term, total: ids.length,
