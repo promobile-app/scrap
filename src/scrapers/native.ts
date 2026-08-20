@@ -198,12 +198,13 @@ function releaseChannel(ch: AppleChannel): void {
 
 // Счётчики троттлинга для /health/apple — по ним видно, упёрся ли текущий
 // APPLE_CHANNELS в лимит Apple, до того как это выльется в rank=null в базе.
-const nativeCounters = { requests: 0, throttled: 0, failures: 0 };
+const nativeCounters = { requests: 0, throttled: 0, failures: 0, skipped: 0, memoHits: 0 };
 
 export function getNativePoolStats() {
   return {
     channels: CHANNEL_COUNT,
     delayMs: NATIVE_DELAY_MS,
+    memoMs: SEARCH_MEMO_MS,
     cooldown: proxyCooldownCount('apple'),
     inFlight: CHANNELS.reduce((n, c) => n + c.inFlight, 0),
     ...nativeCounters,
@@ -260,6 +261,35 @@ const poolUsable = (): boolean => !poolExhausted('apple');
 /** Текст отказа, по которому вызывающий код отличает пустой пул от сбоя. */
 const POOL_EXHAUSTED_MESSAGE = 'apple proxy pool exhausted — все адреса в кулдауне';
 
+/**
+ * Короткий кэш выдачи по терму.
+ *
+ * Один пересчёт связки зовёт нативный поиск ТРИЖДЫ по одному и тому же
+ * запросу: ранг напрямую, оценка объёма внутри estimateVolume и сложность
+ * через searchApps. Три одинаковых запроса уходят в Apple с разницей в
+ * миллисекунды и тратят квоту адреса втрое быстрее, чем нужно.
+ *
+ * Ключ без языка: ответы витрины на `143443,29` и `143443-2,29` совпадают
+ * побайтно (замер в feat/discovery от 14 августа) — ранжирование зависит от
+ * витрины, а не от её языка, поэтому вызов с языком и без него делят один
+ * снимок. Параллельные вызовы делят промис, последовательные — результат в
+ * течение APPLE_SEARCH_MEMO_MS.
+ */
+const SEARCH_MEMO_MS = Number(process.env.APPLE_SEARCH_MEMO_MS ?? 60_000);
+const SEARCH_MEMO_MAX = 5000;
+const searchMemo = new Map<string, { at: number; ids: string[] }>();
+const searchInFlight = new Map<string, Promise<string[]>>();
+
+const memoKey = (term: string, country: string): string =>
+  `${country.toLowerCase()}|${term.toLowerCase().trim()}`;
+
+/** Чистка по размеру: кэш живёт минуту, копить его незачем. */
+function sweepMemo(): void {
+  if (searchMemo.size <= SEARCH_MEMO_MAX) return;
+  const cutoff = Date.now() - SEARCH_MEMO_MS;
+  for (const [key, entry] of searchMemo) if (entry.at < cutoff) searchMemo.delete(key);
+}
+
 interface NativeSearchResponse {
   pageData?: {
     bubbles?: { results?: { id: string; entity: string }[] }[];
@@ -275,10 +305,43 @@ export async function nativeSearchIds(
   country = config.defaultCountry,
   language?: string,
 ): Promise<string[]> {
+  const key = memoKey(term, country);
+
+  const hit = searchMemo.get(key);
+  if (hit && Date.now() - hit.at < SEARCH_MEMO_MS) {
+    nativeCounters.memoHits++;
+    return hit.ids;
+  }
+
+  // Тот же терм уже в полёте — ждём его ответ, а не заказываем второй.
+  const running = searchInFlight.get(key);
+  if (running) {
+    nativeCounters.memoHits++;
+    return running;
+  }
+
+  const pending = fetchSearchIds(term, country, language)
+    .then((ids) => {
+      searchMemo.set(key, { at: Date.now(), ids });
+      sweepMemo();
+      return ids;
+    })
+    .finally(() => searchInFlight.delete(key));
+
+  searchInFlight.set(key, pending);
+  return pending;
+}
+
+/** Собственно поход в Apple. Кэш и дедупликация — в nativeSearchIds выше. */
+async function fetchSearchIds(
+  term: string,
+  country = config.defaultCountry,
+  language?: string,
+): Promise<string[]> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < config.scrapeMaxRetries; attempt++) {
     if (!poolUsable()) {
-      nativeCounters.failures++;
+      nativeCounters.skipped++;
       throw new Error(`nativeSearchIds failed: ${POOL_EXHAUSTED_MESSAGE}`);
     }
     const channel = await acquireChannel();

@@ -33,6 +33,19 @@ let uCursor = 0;
 const FAIL_COOLDOWN_MS = 5 * 60 * 1000;
 
 /**
+ * Длина кулдауна своя на площадку. Пять минут — это про мёртвый адрес у
+ * Google. У Apple причина другая: адрес живой, просто исчерпал квоту на
+ * поиск, и минуты ему хватает, чтобы снова начать отвечать. С пятиминутным
+ * кулдауном один отказ уносил адрес из ротации так надолго, что пул стоял
+ * тёмным почти всё время: 77 отказов за прогон давали 385 адрес-минут
+ * простоя при 200 доступных.
+ */
+const COOLDOWN_MS: Record<ProxyScope, number> = {
+  google: Number(process.env.PROXY_COOLDOWN_MS ?? FAIL_COOLDOWN_MS),
+  apple: Number(process.env.APPLE_PROXY_COOLDOWN_MS ?? 60_000),
+};
+
+/**
  * Кулдаун считается ОТДЕЛЬНО по площадкам.
  *
  * Раньше карта была общей, и блокировка от Google (капча на batchexecute)
@@ -59,7 +72,7 @@ export function reportDispatcherFailure(
   d: Dispatcher | undefined, scope: ProxyScope = 'google',
 ): void {
   const idx = indexOfAgent(d);
-  if (idx >= 0) failedUntil.set(cooldownKey(scope, idx), Date.now() + FAIL_COOLDOWN_MS);
+  if (idx >= 0) failedUntil.set(cooldownKey(scope, idx), Date.now() + COOLDOWN_MS[scope]);
 }
 
 /** Сколько адресов сейчас в кулдауне по площадке — для /health. */
