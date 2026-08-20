@@ -48,9 +48,13 @@ function scheduleRuns(): void {
     `[recheck] следующий проход в ${at.toLocaleTimeString()} ` +
     `(через ${Math.round(wait / 60_000)} мин; расписание ${RUN_AT_HOURS.join(', ')})`,
   );
+  // Без unref(): этот таймер — единственное, что держит процесс планировщика
+  // живым между проходами. С unref() Node выходил с кодом 0, как только пул БД
+  // закрывал idle-соединение, а планировщик — foreground-процесс контейнера:
+  // вместе с ним умирал и API-сервер, и Railway помечал деплой «Completed».
   setTimeout(() => {
     void cycle().finally(() => scheduleRuns());
-  }, wait).unref();
+  }, wait);
 }
 
 // Снимки позиций в топ-чартах. Витрины задаются списком: чарт — это страна,
