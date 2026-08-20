@@ -5,7 +5,7 @@ import { gpSearch } from '../scrapers/googleplay.js';
 import { gpEstimateVolume } from '../analytics/googleplay/volume.js';
 import { gpEstimateDifficulty } from '../analytics/googleplay/difficulty.js';
 import { distinctMetricTargets, saveMetricCheck } from '../db/repo.js';
-import { poolExhausted } from '../scrapers/proxy.js';
+import { poolExhausted, proxyAddressStats } from '../scrapers/proxy.js';
 import { trackedRecheckTargets } from '../tracking/tracking.js';
 
 /**
@@ -22,6 +22,38 @@ import { trackedRecheckTargets } from '../tracking/tracking.js';
  * держать выше, чем кажется безопасным: потолок всё равно не здесь.
  */
 const CONCURRENCY = Number(process.env.RECHECK_CONCURRENCY ?? 8);
+
+/**
+ * Выработка адресов за проход — в лог планировщика, а не в /health/apple.
+ *
+ * Ручка отдаёт счётчики API-процесса, а квоту Apple выжигает проход, и это
+ * отдельный процесс со своей памятью (см. `start` в package.json: server.js и
+ * scheduler.js запускаются рядом). Разрез, ради которого счётчик заводился,
+ * достать можно только отсюда.
+ *
+ * Строки отсортированы по подсети, чтобы соседи по /24 стояли рядом: если их
+ * before403 близки и first приходится на одну минуту, квота считается на
+ * подсеть, и докупать адреса в тех же блоках бесполезно.
+ */
+function logAddressReport(): void {
+  const rows = proxyAddressStats('apple');
+  if (!rows.length) return;
+  const at = (iso: string | null): string => (iso ? iso.slice(11, 19) : '—');
+  console.log(
+    '[proxy] выработка за проход — ok: успешных ответов, before403: успело до' +
+    ' первого отказа, fails: отказов, first/last: время первого и последнего (UTC)',
+  );
+  const sorted = [...rows].sort(
+    (a, b) => (a.group ?? 0) - (b.group ?? 0) || a.slot - b.slot,
+  );
+  for (const r of sorted) {
+    console.log(
+      `[proxy] slot=${String(r.slot).padStart(2)} /24=${String(r.group ?? '?').padStart(2)}` +
+      ` ok=${String(r.ok).padStart(5)} before403=${r.okBeforeFirstFail ?? '—'}` +
+      ` fails=${r.throttled} first=${at(r.firstFailAt)} last=${at(r.lastFailAt)}`,
+    );
+  }
+}
 
 type RecheckTarget = Awaited<ReturnType<typeof distinctMetricTargets>>[number];
 
@@ -117,5 +149,6 @@ export async function recheckAll(): Promise<number> {
   );
 
   console.log(`[recheck] готово: сохранено ${saved}/${targets.length}`);
+  logAddressReport();
   return saved;
 }
