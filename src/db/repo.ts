@@ -152,6 +152,18 @@ export async function distinctMetricTargets(): Promise<
   );
 }
 
+/**
+ * Время последнего сохранённого замера. По нему планировщик решает, нужен ли
+ * полный прогон прямо на старте: перезапуск процесса — не повод переснимать
+ * всё заново.
+ */
+export async function lastMetricCheckAt(): Promise<Date | null> {
+  const rows = await query<{ at: Date | null }>(
+    `SELECT max(captured_at) AS at FROM metric_checks`,
+  );
+  return rows[0]?.at ?? null;
+}
+
 /** История проверок по связке «приложение + ключ» во времени. */
 export async function getMetricHistory(
   platform: string,

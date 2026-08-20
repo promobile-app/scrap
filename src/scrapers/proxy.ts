@@ -70,6 +70,19 @@ export function proxyCooldownCount(scope: ProxyScope): number {
 }
 
 /**
+ * Пул настроен, но целиком в кулдауне по площадке.
+ *
+ * Отличать это от «прокси не настроены» обязательно: во втором случае прямое
+ * соединение — штатный режим, а в первом оно уводит весь трафик на
+ * единственный egress-IP контейнера, и следующим Apple закрывает уже его.
+ * Вызывающий код должен не ходить вовсе, а не ходить напрямую.
+ */
+export function poolExhausted(scope: ProxyScope = 'apple'): boolean {
+  if (!undiciAgents.length) return false;
+  return proxyCooldownCount(scope) >= undiciAgents.length;
+}
+
+/**
  * Round-robin ProxyAgent для undici (или undefined → прямое соединение).
  * Прокси в кулдауне пропускаются; если весь пул в кулдауне — идём напрямую.
  */
