@@ -6,17 +6,52 @@ import { lastMetricCheckAt } from '../db/repo.js';
 import { pool } from '../db/pool.js';
 
 /**
- * Пауза между проходами пересчёта.
+ * Часы, в которые запускается пересчёт, по локальному времени контейнера.
  *
- * Двенадцать часов — это два обновления в сутки, тот ритм, в котором система
- * жила до сих пор. Раньше он получался сам собой: проход был последовательным
- * и длился ровно столько же, поэтому трёхчасовой таймер ни на что не влиял —
- * следующий проход начинался сразу после предыдущего. Теперь проход идёт в
- * несколько потоков и укладывается в пару часов, таймер стал определять ритм
- * по-настоящему, и три часа означали бы восемь проходов в сутки — 720
- * запросов в час с адреса против 550, которые пул нёс без единого отказа.
+ * Раньше расписания не было вовсе: таймер отсчитывал от старта процесса, а
+ * проход длился двенадцать часов, поэтому «обновилось в 4 и в 16» получалось
+ * само собой и съезжало от каждого деплоя. Теперь проход укладывается в пару
+ * часов, и эти часы надо задать явно, иначе ритм определяет момент последней
+ * выкатки.
+ *
+ * Часовой пояс берётся из TZ (на Railway по умолчанию UTC) — то есть чтобы
+ * «4 и 16» означали киевское время, TZ должен быть Europe/Kyiv.
  */
+const RUN_AT_HOURS = (process.env.RECHECK_AT_HOURS ?? '4,16')
+  .split(',')
+  .map((h) => Number(h.trim()))
+  .filter((h) => Number.isInteger(h) && h >= 0 && h < 24)
+  .sort((a, b) => a - b);
+
+/** Столько же держим как «давно не считали» для догоняющего прогона. */
 const RECHECK_MS = Number(process.env.RECHECK_INTERVAL_MS ?? 12 * 60 * 60 * 1000);
+
+/** Миллисекунды до ближайшего запуска по расписанию. */
+function msUntilNextRun(from = new Date()): number {
+  if (!RUN_AT_HOURS.length) return RECHECK_MS;
+  for (let day = 0; day < 2; day++) {
+    for (const hour of RUN_AT_HOURS) {
+      const at = new Date(from);
+      at.setDate(at.getDate() + day);
+      at.setHours(hour, 0, 0, 0);
+      if (at.getTime() > from.getTime()) return at.getTime() - from.getTime();
+    }
+  }
+  return RECHECK_MS;
+}
+
+/** Запуск по расписанию: отработали — тут же встали в очередь на следующий час. */
+function scheduleRuns(): void {
+  const wait = msUntilNextRun();
+  const at = new Date(Date.now() + wait);
+  console.log(
+    `[recheck] следующий проход в ${at.toLocaleTimeString()} ` +
+    `(через ${Math.round(wait / 60_000)} мин; расписание ${RUN_AT_HOURS.join(', ')})`,
+  );
+  setTimeout(() => {
+    void cycle().finally(() => scheduleRuns());
+  }, wait).unref();
+}
 
 // Снимки позиций в топ-чартах. Витрины задаются списком: чарт — это страна,
 // и снимать его «для всех» бессмысленно, нужны те гео, по которым смотрят
@@ -87,24 +122,21 @@ async function msSinceLastRecheck(): Promise<number> {
 }
 
 async function main(): Promise<void> {
-  // Прогон на старте — только если прошлый был давно. Безусловный проход
-  // превращал каждый деплой в полный обход всех связок: вечером 19 августа
-  // пять деплоев подряд дали пять таких проходов за четыре часа поверх уже
-  // исчерпанной квоты Apple, и она не успевала восстановиться между ними.
+  // Догоняющий прогон на старте — только если данные успели протухнуть.
+  // Безусловный проход превращал каждый деплой в полный обход всех связок:
+  // вечером 19 августа пять деплоев подряд дали пять таких проходов за четыре
+  // часа поверх уже исчерпанной квоты Apple.
   const sinceLast = await msSinceLastRecheck();
   if (sinceLast >= RECHECK_MS) {
-    await cycle();
-    setInterval(() => { void cycle(); }, RECHECK_MS);
-  } else {
-    const wait = RECHECK_MS - sinceLast;
     console.log(
-      `[recheck] прогон на старте пропущен: прошлый ${Math.round(sinceLast / 60_000)} мин назад, ` +
-      `следующий через ${Math.round(wait / 60_000)} мин`,
+      `[recheck] догоняющий прогон: прошлый замер ${Math.round(sinceLast / 3_600_000)} ч назад`,
     );
-    setTimeout(() => {
-      void cycle();
-      setInterval(() => { void cycle(); }, RECHECK_MS);
-    }, wait);
+    void cycle().finally(() => scheduleRuns());
+  } else {
+    console.log(
+      `[recheck] прогон на старте пропущен: прошлый ${Math.round(sinceLast / 60_000)} мин назад`,
+    );
+    scheduleRuns();
   }
 
   if (CHART_COUNTRIES.length) {
