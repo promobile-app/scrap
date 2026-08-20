@@ -1,7 +1,10 @@
 import { randomBytes } from 'node:crypto';
 import { request } from 'undici';
+import type { Dispatcher } from 'undici';
 import { config } from '../config.js';
-import { dispatcherForSlot } from './proxy.js';
+import {
+  dispatcherForSlot, poolExhausted, proxyCooldownCount, reportDispatcherFailure,
+} from './proxy.js';
 
 /**
  * Нативный поиск App Store — тот же endpoint, что использует приложение
@@ -138,7 +141,7 @@ class AppleChannel {
     // Не `slot`: так называется номер канала, и локальная переменная его
     // затеняла бы прямо в методе, где важны оба.
     const at = Math.max(now, this.nextSlotAt);
-    this.nextSlotAt = at + config.scrapeDelayMs;
+    this.nextSlotAt = at + NATIVE_DELAY_MS;
     if (at > now) await sleep(at - now);
   }
 
@@ -151,6 +154,15 @@ class AppleChannel {
   acquire(): void { this.inFlight++; }
   release(): void { this.inFlight = Math.max(0, this.inFlight - 1); }
 }
+
+/**
+ * Пауза между запросами внутри канала — то есть и между запросами с одного
+ * адреса, потому что канал закреплён за прокси. Отдельно от SCRAPE_DELAY_MS:
+ * квоту режет именно нативный поиск (MZStore отвечает на него 403 уже после
+ * первых запросов с адреса), а lookup и страницы приложения с тех же адресов
+ * ходят свободно, и тормозить их вместе с поиском незачем.
+ */
+const NATIVE_DELAY_MS = Number(process.env.APPLE_NATIVE_DELAY_MS ?? config.scrapeDelayMs);
 
 const CHANNEL_COUNT = Number(process.env.APPLE_CHANNELS ?? 6);
 const CHANNELS: AppleChannel[] = Array.from(
@@ -191,7 +203,8 @@ const nativeCounters = { requests: 0, throttled: 0, failures: 0 };
 export function getNativePoolStats() {
   return {
     channels: CHANNEL_COUNT,
-    delayMs: config.scrapeDelayMs,
+    delayMs: NATIVE_DELAY_MS,
+    cooldown: proxyCooldownCount('apple'),
     inFlight: CHANNELS.reduce((n, c) => n + c.inFlight, 0),
     ...nativeCounters,
   };
@@ -220,6 +233,33 @@ export function storeFront(country: string, language?: string): string {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Ошибочный ответ Apple. 403 и 429 — это не сбой сети и не «мы что-то не так
+ * прислали»: Apple выдаёт каждому IP небольшую квоту на нативный поиск и
+ * закрывается на минуты, когда она исчерпана (замер 20 августа: адрес отдаёт
+ * один запрос, дальше 403, и снова оживает минут через пять).
+ *
+ * Поэтому адрес выводится из ротации. Раньше этого не делалось: штрафовался
+ * только канал, на 8 секунд, а следующая попытка уходила с того же IP и
+ * продлевала блокировку — так пул из двадцати адресов и оказался выбит
+ * целиком, при том что каждый адрес по отдельности был жив.
+ */
+function noteAppleStatus(status: number, dispatcher: Dispatcher | undefined): void {
+  if (status < 400) return;
+  if (status === 403 || status === 429) reportDispatcherFailure(dispatcher, 'apple');
+  throw new Error(`HTTP ${status}`);
+}
+
+/**
+ * Идти ли в Apple вообще. Когда весь пул в кулдауне, запрос всё равно
+ * закончится 403 — но перед этим сожжёт квоту адреса, который к тому моменту
+ * успел бы отлежаться, а при выбитом пуле ушёл бы напрямую с egress-IP.
+ */
+const poolUsable = (): boolean => !poolExhausted('apple');
+
+/** Текст отказа, по которому вызывающий код отличает пустой пул от сбоя. */
+const POOL_EXHAUSTED_MESSAGE = 'apple proxy pool exhausted — все адреса в кулдауне';
+
 interface NativeSearchResponse {
   pageData?: {
     bubbles?: { results?: { id: string; entity: string }[] }[];
@@ -237,6 +277,10 @@ export async function nativeSearchIds(
 ): Promise<string[]> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < config.scrapeMaxRetries; attempt++) {
+    if (!poolUsable()) {
+      nativeCounters.failures++;
+      throw new Error(`nativeSearchIds failed: ${POOL_EXHAUSTED_MESSAGE}`);
+    }
     const channel = await acquireChannel();
     try {
       const url = new URL(SEARCH_URL);
@@ -265,7 +309,7 @@ export async function nativeSearchIds(
         target = new URL(String(loc), target);
         res = await request(target, reqOpts);
       }
-      if (res.statusCode >= 400) throw new Error(`HTTP ${res.statusCode}`);
+      noteAppleStatus(res.statusCode, dispatcher);
 
       const body = (await res.body.json()) as NativeSearchResponse;
       const bubble = body.pageData?.bubbles?.[0];
@@ -454,6 +498,8 @@ export async function nativeAppPage(
 
   let lastErr: unknown;
   for (let attempt = 0; attempt < config.scrapeMaxRetries; attempt++) {
+    // Ниша — обогащение: при выбитом пуле молча остаёмся без неё.
+    if (!poolUsable()) { lastErr = new Error(POOL_EXHAUSTED_MESSAGE); break; }
     const channel = await acquireChannel();
     try {
       const dispatcher = dispatcherForSlot(channel.slot, 'apple');
@@ -462,7 +508,7 @@ export async function nativeAppPage(
         ? { method: 'GET' as const, headers, dispatcher }
         : { method: 'GET' as const, headers };
       const res = await request(appPageUrl(country, appId), reqOpts);
-      if (res.statusCode >= 400) throw new Error(`HTTP ${res.statusCode}`);
+      noteAppleStatus(res.statusCode, dispatcher);
 
       const body = (await res.body.json()) as NativeAppPageResponse;
       const product = body.storePlatformData?.['product-dv']?.results?.[String(appId)];

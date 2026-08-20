@@ -5,6 +5,7 @@ import { gpSearch } from '../scrapers/googleplay.js';
 import { gpEstimateVolume } from '../analytics/googleplay/volume.js';
 import { gpEstimateDifficulty } from '../analytics/googleplay/difficulty.js';
 import { distinctMetricTargets, saveMetricCheck } from '../db/repo.js';
+import { poolExhausted } from '../scrapers/proxy.js';
 import { trackedRecheckTargets } from '../tracking/tracking.js';
 
 /**
@@ -25,8 +26,14 @@ export async function recheckAll(): Promise<number> {
   ];
   console.log(`[recheck] старт: ${targets.length} связок`, new Date().toISOString());
   let saved = 0;
+  // Провалы подряд означают, что закрыт источник, а не что не повезло с
+  // конкретным ключом. Дальше идти незачем: 20 августа прогон перемолол
+  // 36 тысяч связок по три попытки каждая, ничего не сохранил и всё это время
+  // держал квоту Apple на нуле, не давая адресам отлежаться.
+  const streakLimit = Number(process.env.RECHECK_FAILURE_STREAK ?? 25);
+  let streak = 0;
 
-  for (const t of targets) {
+  for (const [i, t] of targets.entries()) {
     try {
       if (t.platform === 'android') {
         const [results, volume, difficulty] = await Promise.all([
@@ -56,8 +63,18 @@ export async function recheckAll(): Promise<number> {
         });
       }
       saved++;
+      streak = 0;
     } catch (err) {
+      streak++;
       console.error(`[recheck] ${t.platform}/${t.appId}/${t.term}:`, String(err));
+      if (streak >= streakLimit) {
+        console.error(
+          `[recheck] остановлен: ${streak} провалов подряд` +
+          `${poolExhausted('apple') ? ' (пул прокси выбит целиком)' : ''}` +
+          ` — пропущено ${targets.length - i - 1} связок из ${targets.length}`,
+        );
+        break;
+      }
     }
   }
 

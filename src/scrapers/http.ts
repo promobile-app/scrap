@@ -1,6 +1,7 @@
 import { request } from 'undici';
 import { config } from '../config.js';
-import { dispatcherForSlot } from './proxy.js';
+import type { Dispatcher } from 'undici';
+import { dispatcherForSlot, reportDispatcherFailure } from './proxy.js';
 
 const USER_AGENTS = [
   'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
@@ -76,11 +77,17 @@ export function getHttpPoolStats() {
   };
 }
 
-/** Общая обработка ответа: считает статусы и штрафует слот при троттлинге. */
-function noteStatus(idx: number, statusCode: number): void {
+/**
+ * Общая обработка ответа: считает статусы и штрафует слот при троттлинге.
+ *
+ * 429 и 403 штрафуют ещё и адрес: это квота Apple на IP, и следующая попытка
+ * с того же адреса её только продлевает (см. noteAppleStatus в native.ts).
+ */
+function noteStatus(idx: number, statusCode: number, dispatcher?: Dispatcher): void {
   if (statusCode === 429) {
     counters.throttled429++;
     bumpSlotPenalty(idx);
+    reportDispatcherFailure(dispatcher, 'apple');
     throw new Error(`HTTP 429`);
   }
   if (statusCode >= 500) {
@@ -88,6 +95,12 @@ function noteStatus(idx: number, statusCode: number): void {
     // 5xx у Apple под нагрузкой — тот же сигнал «перебор», но мягче.
     bumpSlotPenalty(idx, Math.round(THROTTLE_PENALTY_MS / 4));
     throw new Error(`HTTP ${statusCode}`);
+  }
+  if (statusCode === 403) {
+    counters.throttled429++;
+    bumpSlotPenalty(idx);
+    reportDispatcherFailure(dispatcher, 'apple');
+    throw new Error(`HTTP 403`);
   }
   if (statusCode >= 400) throw new Error(`HTTP ${statusCode} (non-retryable)`);
 }
@@ -115,7 +128,7 @@ export async function fetchJson<T = unknown>(url: string, opts: FetchOptions = {
         headers: { 'User-Agent': pickUserAgent(), Accept: 'application/json', ...opts.headers },
         ...(dispatcher ? { dispatcher } : {}),
       });
-      noteStatus(slot, res.statusCode);
+      noteStatus(slot, res.statusCode, dispatcher);
       return (await res.body.json()) as T;
     } catch (err) {
       lastErr = err;
@@ -146,7 +159,7 @@ export async function fetchText(url: string, opts: FetchOptions = {}): Promise<s
         headers: { 'User-Agent': pickUserAgent(), ...opts.headers },
         ...(dispatcher ? { dispatcher } : {}),
       });
-      noteStatus(slot, res.statusCode);
+      noteStatus(slot, res.statusCode, dispatcher);
       return await res.body.text();
     } catch (err) {
       lastErr = err;

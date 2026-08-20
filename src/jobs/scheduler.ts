@@ -2,6 +2,7 @@ import { recheckAll } from './recheck.js';
 import { collectCharts } from './collect.js';
 import { sendDigests } from './digest.js';
 import { seedGeoCorpus } from '../analytics/corpusSeeder.js';
+import { lastMetricCheckAt } from '../db/repo.js';
 import { pool } from '../db/pool.js';
 
 const RECHECK_MS = 3 * 60 * 60 * 1000; // каждые 3 часа
@@ -60,9 +61,40 @@ async function chartCycle(): Promise<void> {
   }
 }
 
+/**
+ * Сколько прошло с прошлого замера. Планировщик своего состояния не хранит,
+ * но оно и не нужно: последний сохранённый замер и есть отметка о прогоне.
+ */
+async function msSinceLastRecheck(): Promise<number> {
+  try {
+    const at = await lastMetricCheckAt();
+    return at ? Date.now() - at.getTime() : Number.POSITIVE_INFINITY;
+  } catch {
+    // БД недоступна — ведём себя как раньше, прогоном на старте.
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
 async function main(): Promise<void> {
-  await cycle();
-  setInterval(() => { void cycle(); }, RECHECK_MS);
+  // Прогон на старте — только если прошлый был давно. Безусловный проход
+  // превращал каждый деплой в полный обход всех связок: вечером 19 августа
+  // пять деплоев подряд дали пять таких проходов за четыре часа поверх уже
+  // исчерпанной квоты Apple, и она не успевала восстановиться между ними.
+  const sinceLast = await msSinceLastRecheck();
+  if (sinceLast >= RECHECK_MS) {
+    await cycle();
+    setInterval(() => { void cycle(); }, RECHECK_MS);
+  } else {
+    const wait = RECHECK_MS - sinceLast;
+    console.log(
+      `[recheck] прогон на старте пропущен: прошлый ${Math.round(sinceLast / 60_000)} мин назад, ` +
+      `следующий через ${Math.round(wait / 60_000)} мин`,
+    );
+    setTimeout(() => {
+      void cycle();
+      setInterval(() => { void cycle(); }, RECHECK_MS);
+    }, wait);
+  }
 
   if (CHART_COUNTRIES.length) {
     console.log(
