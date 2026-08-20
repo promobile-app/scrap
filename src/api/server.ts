@@ -16,7 +16,9 @@ import {
 import { nativeSearchIds, storeLanguages, getNativePoolStats, nativeAppPage } from '../scrapers/native.js';
 import { storefrontShots, type StorefrontShot } from '../scrapers/storefrontShot.js';
 import { getHttpPoolStats } from '../scrapers/http.js';
-import { proxyCooldownCount, proxyCount, proxyEnabled } from '../scrapers/proxy.js';
+import {
+  proxyAddressStats, proxyCooldownCount, proxyCount, proxyEnabled, proxySubnetCount,
+} from '../scrapers/proxy.js';
 import { gpSearch, gpAppLookup, gpTopChart, langOf } from '../scrapers/googleplay.js';
 import { gpRpcSearch } from '../scrapers/gplayRpc.js';
 import { finskyDetails } from '../scrapers/finsky/details.js';
@@ -994,10 +996,16 @@ app.get('/health/apple', async () => {
     proxies: {
       enabled: proxyEnabled(),
       count: proxyCount(),
+      // Число различных /24. Если квота Apple считается на подсеть, а не на
+      // IP, то потолок пула задаёт именно оно, а не count.
+      subnets: proxySubnetCount(),
       cooldown: {
         apple: proxyCooldownCount('apple'),
         google: proxyCooldownCount('google'),
       },
+      // Построчно по адресам: okBeforeFirstFail — ёмкость адреса, group —
+      // подсеть. По ним видно, докупать адреса или менять блоки.
+      addresses: proxyAddressStats('apple'),
     },
   });
   try {

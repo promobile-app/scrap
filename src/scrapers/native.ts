@@ -4,6 +4,7 @@ import type { Dispatcher } from 'undici';
 import { config } from '../config.js';
 import {
   dispatcherForSlot, poolExhausted, proxyCooldownCount, reportDispatcherFailure,
+  reportDispatcherSuccess,
 } from './proxy.js';
 
 /**
@@ -246,7 +247,9 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * целиком, при том что каждый адрес по отдельности был жив.
  */
 function noteAppleStatus(status: number, dispatcher: Dispatcher | undefined): void {
-  if (status < 400) return;
+  // Успех считается по адресу, а не только глобально: выработка адреса до его
+  // первого отказа — единственный способ узнать, какова квота Apple на IP.
+  if (status < 400) { reportDispatcherSuccess(dispatcher, 'apple'); return; }
   if (status === 403 || status === 429) reportDispatcherFailure(dispatcher, 'apple');
   throw new Error(`HTTP ${status}`);
 }

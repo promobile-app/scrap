@@ -1,7 +1,9 @@
 import { request } from 'undici';
 import { config } from '../config.js';
 import type { Dispatcher } from 'undici';
-import { dispatcherForSlot, reportDispatcherFailure } from './proxy.js';
+import {
+  dispatcherForSlot, reportDispatcherFailure, reportDispatcherSuccess,
+} from './proxy.js';
 
 const USER_AGENTS = [
   'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
@@ -103,6 +105,10 @@ function noteStatus(idx: number, statusCode: number, dispatcher?: Dispatcher): v
     throw new Error(`HTTP 403`);
   }
   if (statusCode >= 400) throw new Error(`HTTP ${statusCode} (non-retryable)`);
+  // Сюда доходят только успешные ответы. Учитываем их по адресу: lookup и
+  // suggest ходят через те же прокси, что и нативный поиск, и в выработку
+  // адреса входят наравне с ним.
+  reportDispatcherSuccess(dispatcher, 'apple');
 }
 
 export interface FetchOptions {
