@@ -235,6 +235,22 @@ type SuggestFn = (term: string, country: string) => Promise<string[]>;
 const IOS_MAX_CANDIDATES = Number(process.env.DISCOVERY_MAX_CANDIDATES ?? 1200);
 const GP_MAX_CANDIDATES = Number(process.env.DISCOVERY_MAX_CANDIDATES_GP ?? 250);
 
+/**
+ * Сколько кандидатов ГЕНЕРИРУЕМ — в отличие от того, сколько измеряем.
+ *
+ * Это две разные цены. Генерация — это подсказки автокомплита
+ * (MZSearchHints), эндпоинт, который за сутки принял 54 868 запросов без
+ * единого троттлинга. Замер — это выдача (MZStore), которую Apple
+ * рационирует по адресам и которой мы 19 августа выбили весь пул.
+ *
+ * Раньше обе ширины задавались одним числом: список резался ДО замера, и
+ * всё, что не влезало, пропадало, хотя досталось почти даром. Теперь
+ * урожай целиком уходит в накопительный словарь гео, а под замер идёт
+ * приоритетная верхушка — сиды приложения и сильный автокомплит-сигнал.
+ * Остальное измерится следующими прогонами из корпуса, по мере бюджета.
+ */
+const GEN_CANDIDATES = Number(process.env.DISCOVERY_GENERATE_CANDIDATES ?? 5000);
+
 // Жёсткий потолок замеров за один прогон (кандидаты + корпус). Ограничивает
 // худший случай по времени ответа: корпус гео растёт бесконечно, и без этого
 // потолка через полгода один клик уходил бы в тысячи запросов к магазину.
@@ -556,7 +572,9 @@ async function buildCandidates(
     'ios',
     (term) => suggest(term, country, language),
     title, genre, country, description,
-    IOS_MAX_CANDIDATES, nicheTerms, subtitle, competitorText, ALPHABET_SEEDS,
+    // Потолок генерации, не замера: обрезать урожай здесь значит выбросить
+    // ключи, которые уже оплачены подсказками.
+    GEN_CANDIDATES, nicheTerms, subtitle, competitorText, ALPHABET_SEEDS,
   );
 }
 
@@ -630,8 +648,17 @@ export async function discoverKeywords(
   for (const [term, hit] of corpus.serpHits) {
     if (hit.ageHours < SERP_FRESH_HOURS) cacheSet(`${country}|${term}`, hit.ids);
   }
-  const allTerms = [...candidates, ...corpus.terms].slice(0, MAX_MEASURE);
-  feedCorpus('ios', country, allTerms);
+  // В словарь гео — весь урожай генерации: это запись в базу, а не запрос в
+  // магазин. Ключ, попавший сюда сегодня, завтра придёт в corpus.terms и
+  // будет измерен в следующем прогоне — так база и растёт, не упираясь в
+  // квоту Apple. Корпусные термы сюда не нужны: они и взяты из корпуса.
+  feedCorpus('ios', country, candidates);
+
+  // А под замер — приоритетная верхушка: buildCandidates уже отсортировал
+  // список так, что первыми идут сиды приложения и сильный сигнал
+  // автокомплита.
+  const measurable = candidates.slice(0, IOS_MAX_CANDIDATES);
+  const allTerms = [...measurable, ...corpus.terms].slice(0, MAX_MEASURE);
 
   // Параллельный сбор ранков. Apple channel pool в native.ts сам разрулит
   // slot-throttling, поэтому конкурентность здесь ограничивают не ошибки, а
