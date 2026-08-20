@@ -9,6 +9,55 @@ import { poolExhausted } from '../scrapers/proxy.js';
 import { trackedRecheckTargets } from '../tracking/tracking.js';
 
 /**
+ * Сколько связок пересчитывается одновременно.
+ *
+ * Проход был строго последовательным: связка за связкой, ~секунда на каждую,
+ * 44 тысячи связок — двенадцать часов. Отсюда и наблюдаемый ритм «обновилось в
+ * 4 и в 16»: это не расписание, а длительность прохода.
+ *
+ * Темп запросов к магазину этим НЕ задаётся — его держит пул каналов в
+ * native.ts (APPLE_CHANNELS × APPLE_NATIVE_DELAY_MS). Здесь только глубина
+ * очереди: воркеры упрутся в паузы каналов и будут ждать, а не разгонят
+ * нагрузку сверх того, что пул готов выпустить. Поэтому значение можно
+ * держать выше, чем кажется безопасным: потолок всё равно не здесь.
+ */
+const CONCURRENCY = Number(process.env.RECHECK_CONCURRENCY ?? 8);
+
+type RecheckTarget = Awaited<ReturnType<typeof distinctMetricTargets>>[number];
+
+/** Один пересчёт: замер по обеим платформам и запись в историю. */
+async function recheckTarget(t: RecheckTarget): Promise<void> {
+  if (t.platform === 'android') {
+    const [results, volume, difficulty] = await Promise.all([
+      gpSearch(t.term, t.country, 250),
+      gpEstimateVolume(t.term, t.country),
+      gpEstimateDifficulty(t.term, t.country),
+    ]);
+    const idx = results.findIndex((a) => a.appId === t.appId);
+    await saveMetricCheck({
+      platform: 'android', appId: t.appId, appTitle: t.appTitle,
+      term: t.term, country: t.country, language: null,
+      rank: idx === -1 ? null : idx + 1, totalResults: results.length,
+      volume: volume.score, difficulty: difficulty.score,
+    });
+    return;
+  }
+
+  const [ids, volume, difficulty] = await Promise.all([
+    nativeSearchIds(t.term, t.country, t.language ?? undefined),
+    getVolume(t.term, t.country),
+    estimateDifficulty(t.term, t.country),
+  ]);
+  const idx = ids.indexOf(t.appId);
+  await saveMetricCheck({
+    platform: 'ios', appId: t.appId, appTitle: t.appTitle,
+    term: t.term, country: t.country, language: t.language,
+    rank: idx === -1 ? null : idx + 1, totalResults: ids.length,
+    volume: volume.score, difficulty: difficulty.score,
+  });
+}
+
+/**
  * Переснимает все связки «приложение + ключ», которые уже проверялись,
  * и сохраняет новый замер в историю — для накопления графиков.
  * Отслеживаемые приложения (tracked_apps) добавляются в цели явно: их история
@@ -24,7 +73,10 @@ export async function recheckAll(): Promise<number> {
     ...historic,
     ...tracked.filter((t) => !seen.has(`${t.platform}|${t.appId}|${t.term}|${t.country}`)),
   ];
-  console.log(`[recheck] старт: ${targets.length} связок`, new Date().toISOString());
+  console.log(
+    `[recheck] старт: ${targets.length} связок в ${CONCURRENCY} потоков`,
+    new Date().toISOString(),
+  );
   let saved = 0;
   // Провалы подряд означают, что закрыт источник, а не что не повезло с
   // конкретным ключом. Дальше идти незачем: 20 августа прогон перемолол
@@ -32,51 +84,37 @@ export async function recheckAll(): Promise<number> {
   // держал квоту Apple на нуле, не давая адресам отлежаться.
   const streakLimit = Number(process.env.RECHECK_FAILURE_STREAK ?? 25);
   let streak = 0;
+  let cursor = 0;
+  let stopped = false;
 
-  for (const [i, t] of targets.entries()) {
-    try {
-      if (t.platform === 'android') {
-        const [results, volume, difficulty] = await Promise.all([
-          gpSearch(t.term, t.country, 250),
-          gpEstimateVolume(t.term, t.country),
-          gpEstimateDifficulty(t.term, t.country),
-        ]);
-        const idx = results.findIndex((a) => a.appId === t.appId);
-        await saveMetricCheck({
-          platform: 'android', appId: t.appId, appTitle: t.appTitle,
-          term: t.term, country: t.country, language: null,
-          rank: idx === -1 ? null : idx + 1, totalResults: results.length,
-          volume: volume.score, difficulty: difficulty.score,
-        });
-      } else {
-        const [ids, volume, difficulty] = await Promise.all([
-          nativeSearchIds(t.term, t.country, t.language ?? undefined),
-          getVolume(t.term, t.country),
-          estimateDifficulty(t.term, t.country),
-        ]);
-        const idx = ids.indexOf(t.appId);
-        await saveMetricCheck({
-          platform: 'ios', appId: t.appId, appTitle: t.appTitle,
-          term: t.term, country: t.country, language: t.language,
-          rank: idx === -1 ? null : idx + 1, totalResults: ids.length,
-          volume: volume.score, difficulty: difficulty.score,
-        });
-      }
-      saved++;
-      streak = 0;
-    } catch (err) {
-      streak++;
-      console.error(`[recheck] ${t.platform}/${t.appId}/${t.term}:`, String(err));
-      if (streak >= streakLimit) {
-        console.error(
-          `[recheck] остановлен: ${streak} провалов подряд` +
-          `${poolExhausted('apple') ? ' (пул прокси выбит целиком)' : ''}` +
-          ` — пропущено ${targets.length - i - 1} связок из ${targets.length}`,
-        );
-        break;
+  const worker = async (): Promise<void> => {
+    while (!stopped) {
+      const i = cursor++;
+      if (i >= targets.length) return;
+      const t = targets[i]!;
+      try {
+        await recheckTarget(t);
+        saved++;
+        // Успех обнуляет счётчик: пул, отдающий хоть что-то, ещё жив.
+        streak = 0;
+      } catch (err) {
+        streak++;
+        console.error(`[recheck] ${t.platform}/${t.appId}/${t.term}:`, String(err));
+        if (streak >= streakLimit) {
+          stopped = true;
+          console.error(
+            `[recheck] остановлен: ${streak} провалов подряд` +
+            `${poolExhausted('apple') ? ' (пул прокси выбит целиком)' : ''}` +
+            ` — пропущено ${Math.max(0, targets.length - cursor)} связок из ${targets.length}`,
+          );
+        }
       }
     }
-  }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, targets.length) }, () => worker()),
+  );
 
   console.log(`[recheck] готово: сохранено ${saved}/${targets.length}`);
   return saved;
